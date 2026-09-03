@@ -1390,7 +1390,12 @@ function FocusOverlay() {
     import('@tauri-apps/api/event')
       .then(({ listen }) =>
         listen<CursorPoint>('cursor-position', (event) => {
-          cursor.current = event.payload
+          // Rust 侧发的是物理像素；Canvas 绘制用 CSS 像素，需除以缩放比。
+          const ratio = window.devicePixelRatio || 1
+          cursor.current = {
+            x: event.payload.x / ratio,
+            y: event.payload.y / ratio,
+          }
         }),
       )
       .then((cleanup) => {

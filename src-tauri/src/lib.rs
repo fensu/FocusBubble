@@ -1,4 +1,3 @@
-use device_query::{DeviceQuery, DeviceState};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
@@ -406,22 +405,6 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// macOS 全局鼠标位置（主显示器；NSEvent 为左下角原点，需翻转到左上角）。
-/// points 与 WebView CSS 像素同单位。多显示器支持在阶段 E 处理。
-#[cfg(target_os = "macos")]
-fn macos_mouse_position() -> (i32, i32) {
-    unsafe {
-        let location = objc2_app_kit::NSEvent::mouseLocation();
-        let main_height = objc2_app_kit::NSScreen::mainScreen()
-            .map(|screen| screen.frame().size.height)
-            .unwrap_or(0.0);
-        (
-            location.x.round() as i32,
-            (main_height - location.y).round() as i32,
-        )
-    }
-}
-
 fn tray_toggle_label(enabled: bool) -> &'static str {
     if enabled {
         "关闭效果"
@@ -733,37 +716,21 @@ pub fn run() {
 
             let handle = app.handle().clone();
             thread::spawn(move || {
-                #[cfg(target_os = "macos")]
-                {
-                    // device_query 在 macOS 依赖辅助功能权限（授权弹窗还会被 overlay 挡住），
-                    // 改用 NSEvent 被动查询全局鼠标，无需任何权限。
-                    loop {
-                        let (x, y) = macos_mouse_position();
-                        let _ = handle.emit_to(
-                            "overlay",
-                            "cursor-position",
-                            CursorPosition { x, y },
-                        );
-                        thread::sleep(Duration::from_millis(16));
-                    }
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let device_state = DeviceState::new();
-
-                    loop {
-                        let mouse = device_state.get_mouse();
+                // Tauri cursor_position 跨平台且免权限：
+                // Windows=GetCursorPos，macOS=NSEvent.mouseLocation，Linux=X11。
+                // 返回物理像素，前端按 devicePixelRatio 换算回 CSS 像素。
+                loop {
+                    if let Ok(position) = handle.cursor_position() {
                         let _ = handle.emit_to(
                             "overlay",
                             "cursor-position",
                             CursorPosition {
-                                x: mouse.coords.0,
-                                y: mouse.coords.1,
+                                x: position.x.round() as i32,
+                                y: position.y.round() as i32,
                             },
                         );
-                        thread::sleep(Duration::from_millis(16));
                     }
+                    thread::sleep(Duration::from_millis(16));
                 }
             });
 
