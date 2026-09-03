@@ -5,3 +5,7 @@ src-tauri/target
 .env
 .env.*
 !.env.example
+
+# updater signing keys (never commit)
+keys/
+*.key

@@ -7,6 +7,7 @@ import {
   Globe2,
   MousePointer2,
   Power,
+  RefreshCw,
   Settings2,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -119,6 +120,8 @@ const copy = {
     resetDefaults: '恢复默认',
     lowMotion: '低动态',
     strongFocus: '强聚焦',
+    updateAvailable: '有新版本',
+    updateInstalling: '正在更新…',
     preview: '遮罩预览',
     settings: '设置',
     spotlight: '气泡',
@@ -182,6 +185,8 @@ const copy = {
     resetDefaults: 'Reset defaults',
     lowMotion: 'Low motion',
     strongFocus: 'Strong focus',
+    updateAvailable: 'Update available',
+    updateInstalling: 'Updating…',
     preview: 'Mask preview',
     settings: 'Settings',
     spotlight: 'Bubble',
@@ -245,6 +250,8 @@ const copy = {
     resetDefaults: 'デフォルトに戻す',
     lowMotion: '低ダイナミック',
     strongFocus: '強フォーカス',
+    updateAvailable: '更新あり',
+    updateInstalling: '更新中…',
     preview: 'マスクプレビュー',
     settings: '設定',
     spotlight: 'バブル',
@@ -308,6 +315,8 @@ const copy = {
     resetDefaults: '기본값 복원',
     lowMotion: '저 다이내믹',
     strongFocus: '강한 포커스',
+    updateAvailable: '업데이트 있음',
+    updateInstalling: '업데이트 중…',
     preview: '마스크 미리보기',
     settings: '설정',
     spotlight: '버블',
@@ -371,6 +380,8 @@ const copy = {
     resetDefaults: 'Standardwerte',
     lowMotion: 'Ruhig',
     strongFocus: 'Starker Fokus',
+    updateAvailable: 'Update verfügbar',
+    updateInstalling: 'Aktualisiere…',
     preview: 'Masken-Vorschau',
     settings: 'Einstellungen',
     spotlight: 'Blase',
@@ -434,6 +445,8 @@ const copy = {
     resetDefaults: 'Valeurs par défaut',
     lowMotion: 'Faible mouvement',
     strongFocus: 'Focus intense',
+    updateAvailable: 'Mise à jour',
+    updateInstalling: 'Mise à jour…',
     preview: 'Aperçu du masque',
     settings: 'Réglages',
     spotlight: 'Bulle',
@@ -497,6 +510,8 @@ const copy = {
     resetDefaults: 'Valores predeterminados',
     lowMotion: 'Movimiento bajo',
     strongFocus: 'Enfoque fuerte',
+    updateAvailable: 'Actualización',
+    updateInstalling: 'Actualizando…',
     preview: 'Vista previa de máscara',
     settings: 'Ajustes',
     spotlight: 'Burbuja',
@@ -579,6 +594,8 @@ function ControlPanel() {
   const [screenLimits, setScreenLimits] = useState(getScreenLimits)
   const [gpuStatus, setGpuStatus] = useState<GpuPrototypeStatus | null>(null)
   const [passthroughBusy, setPassthroughBusy] = useState(false)
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null)
+  const [updateBusy, setUpdateBusy] = useState(false)
   const t = copy[settings.language]
 
   useEffect(() => {
@@ -636,6 +653,43 @@ function ControlPanel() {
       console.error('set_close_behavior failed:', error),
     )
   }, [settings.closeToTray])
+
+  // 启动时检查应用更新（浏览器预览 / 非打包环境下静默跳过）。
+  useEffect(() => {
+    let cancelled = false
+
+    import('@tauri-apps/plugin-updater')
+      .then(({ check }) => check())
+      .then((update) => {
+        if (!cancelled && update?.available) {
+          setUpdateVersion(update.version)
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const installUpdate = async () => {
+    if (!updateVersion || updateBusy) return
+
+    setUpdateBusy(true)
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater')
+      const update = await check()
+      if (update?.available) {
+        await update.downloadAndInstall()
+        const { relaunch } = await import('@tauri-apps/plugin-process')
+        await relaunch()
+      }
+    } catch (error) {
+      console.error('update install failed:', error)
+    } finally {
+      setUpdateBusy(false)
+    }
+  }
 
   useEffect(() => {
     const updateLimits = () => setScreenLimits(getScreenLimits())
@@ -759,6 +813,19 @@ function ControlPanel() {
         <header className="topbar">
           <p className="eyebrow">Focus Bubble</p>
           <div className="topActions">
+            {updateVersion && (
+              <button
+                type="button"
+                className="power is-on"
+                onClick={installUpdate}
+                disabled={updateBusy}
+              >
+                <RefreshCw size={16} />
+                {updateBusy
+                  ? t.updateInstalling
+                  : `${t.updateAvailable} v${updateVersion}`}
+              </button>
+            )}
             <label className="languageSelect">
               <Globe2 size={17} />
               <span>{t.language}</span>
@@ -1303,8 +1370,10 @@ function FocusOverlay() {
     }
 
     // 视觉舒适度层状态（与 Rust 侧 update_comfort 同一套规则）。
+    // 亮度和模糊不随速度调制；几何调制轻微且双重平滑，防止清晰区忽大忽小。
     const comfort = {
       speed: 0,
+      ease: 0,
       lastRaw: { ...cursor.current },
       lastTime: performance.now(),
     }
@@ -1314,29 +1383,32 @@ function FocusOverlay() {
       const target = cursor.current
       const current = smooth.current
 
-      // 速度 EMA：抬升快、回落慢，停止后逐渐收拢。
+      // 第一层平滑：速度 EMA（抬升/回落都温和）。
       const now = performance.now()
       const dt = Math.max((now - comfort.lastTime) / 1000, 1 / 240)
       const speed =
         Math.hypot(target.x - comfort.lastRaw.x, target.y - comfort.lastRaw.y) / dt
-      const speedAlpha = speed > comfort.speed ? 0.35 : 0.06
+      const speedAlpha = speed > comfort.speed ? 0.12 : 0.045
       comfort.speed += (speed - comfort.speed) * speedAlpha
       comfort.lastRaw = { ...target }
       comfort.lastTime = now
 
-      const t = Math.min(comfort.speed / 3600, 1)
-      const ease = t * t * (3 - 2 * t)
+      // 第二层平滑：ease 因子低通。
+      const t = Math.min(comfort.speed / 4000, 1)
+      const targetEase = t * t * (3 - 2 * t)
+      comfort.ease += (targetEase - comfort.ease) * 0.08
+      const ease = comfort.ease
 
       // 高速时跟随更慢；带状模式纵向减半（按行吸附的感觉）。
-      const tracking = settings.smoothing * (1 - 0.7 * ease)
+      const tracking = settings.smoothing * (1 - 0.6 * ease)
       current.x += (target.x - current.x) * tracking
       current.y +=
         (target.y - current.y) * (settings.mode === 'spotlight' ? tracking : tracking * 0.5)
 
-      // 高速时：暗度↓、清晰区↑、羽化↑。
-      const effectiveOpacity = Math.min(settings.opacity * (1 - 0.6 * ease), 0.7)
-      const effectiveRadius = settings.radius * (1 + 0.8 * ease)
-      const effectiveFeather = settings.feather + 260 * ease
+      // 速度自适应只作用于几何（轻微）：清晰区最多扩 25%，羽化最多 +140px。
+      const effectiveOpacity = Math.min(settings.opacity, 0.7)
+      const effectiveRadius = settings.radius * (1 + 0.25 * ease)
+      const effectiveFeather = settings.feather + 140 * ease
 
       context.clearRect(0, 0, width, height)
 
@@ -1370,7 +1442,7 @@ function FocusOverlay() {
 
         if (settings.mode === 'reading' || settings.mode === 'code') {
           const bandBase = settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight
-          const bandHeight = bandBase * (1 + 0.8 * ease)
+          const bandHeight = bandBase * (1 + 0.25 * ease)
           const gradient = context.createLinearGradient(0, current.y - bandHeight, 0, current.y + bandHeight)
           gradient.addColorStop(0, 'rgba(0, 0, 0, 0)')
           gradient.addColorStop(0.28, 'rgba(0, 0, 0, 1)')

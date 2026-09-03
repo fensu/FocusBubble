@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default permissions for Focus Bubble windows.","local":true,"windows":["main","overlay"],"permissions":["core:default","core:event:default","core:window:default"]}}
+{"default":{"identifier":"default","description":"Default permissions for Focus Bubble windows.","local":true,"windows":["main","overlay"],"permissions":["core:default","core:event:default","core:window:default","updater:default","process:allow-restart"]}}

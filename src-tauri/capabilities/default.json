@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default permissions for Focus Bubble windows.",
   "windows": ["main", "overlay"],
-  "permissions": ["core:default", "core:event:default", "core:window:default"]
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

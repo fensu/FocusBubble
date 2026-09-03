@@ -497,6 +497,8 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             overlay_excluded_from_capture: AtomicBool::new(false),
             d3d11_device_available: AtomicBool::new(false),

@@ -11,10 +11,23 @@ permissions:
 
 jobs:
   build-windows:
-    name: Windows portable (x64)
+    name: Windows (x64)
     runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify updater signing key is configured
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Missing repository secret TAURI_SIGNING_PRIVATE_KEY. Generate a key with 'npx tauri signer generate -w keys/focusbubble-updater.key', then add the private key file content as the secret and re-run."
+            exit 1
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -30,9 +43,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # --no-bundle: 只编译 exe，不生成 NSIS/MSI 安装包（不写注册表、免安装）
-      - name: Build portable executable
-        run: npx tauri build --no-bundle
+      # NSIS 安装器 + updater 签名产物（*.exe.sig）
+      - name: Build NSIS installer and updater artifacts
+        run: npx tauri build --bundles nsis
 
       - name: Package portable zip
         shell: pwsh
@@ -41,23 +54,50 @@ jobs:
           if (-not (Test-Path $exe)) { throw "executable not found: $exe" }
           Compress-Archive -Path $exe -DestinationPath FocusBubble-windows-x64-portable.zip
 
-      - name: Upload artifact
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+          Copy-Item src-tauri/target/release/bundle/nsis/* installer/
+
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FocusBubble-windows-x64-portable
+          name: FocusBubble-windows-portable
           path: FocusBubble-windows-x64-portable.zip
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusBubble-windows-installer
+          path: installer/*
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: FocusBubble-windows-x64-portable.zip
+          files: |
+            FocusBubble-windows-x64-portable.zip
+            installer/*
 
   build-macos:
-    name: macOS universal (dmg)
+    name: macOS universal
     runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify updater signing key is configured
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Missing repository secret TAURI_SIGNING_PRIVATE_KEY. Generate a key with 'npx tauri signer generate -w keys/focusbubble-updater.key', then add the private key file content as the secret and re-run."
+            exit 1
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -75,22 +115,83 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build universal dmg
-        run: npx tauri build --target universal-apple-darwin
+      # dmg 供手动下载安装；updater 产物为 *.app.tar.gz + .sig
+      - name: Build universal dmg and updater artifacts
+        run: npx tauri build --target universal-apple-darwin --bundles dmg
 
-      - name: Collect dmg
+      - name: Collect artifacts
         run: |
-          mkdir -p artifacts
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg artifacts/
+          mkdir -p dmg updater
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dmg/
+          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz* updater/
 
-      - name: Upload artifact
+      - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FocusBubble-macos-universal
-          path: artifacts/*.dmg
+          name: FocusBubble-macos-dmg
+          path: dmg/*
+
+      - name: Upload updater artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusBubble-macos-updater
+          path: updater/*
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.dmg
+          files: |
+            dmg/*
+            updater/*
+
+  compose-updater-manifest:
+    name: Compose latest.json
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FocusBubble-windows-installer
+          path: windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: FocusBubble-macos-updater
+          path: macos
+
+      - name: Compose latest.json
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          WIN_SETUP=$(basename "$(find windows -name '*x64-setup.exe' | head -1)")
+          WIN_SIG=$(cat "$(find windows -name '*x64-setup.exe.sig' | head -1)")
+          MAC_TAR=$(basename "$(find macos -name '*.app.tar.gz' | head -1)")
+          MAC_SIG=$(cat "$(find macos -name '*.app.tar.gz.sig' | head -1)")
+          BASE="https://github.com/fensu/FocusBubble/releases/download/${GITHUB_REF_NAME}"
+
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "Focus Bubble ${VERSION}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${WIN_SIG}",
+                "url": "${BASE}/${WIN_SETUP}"
+              },
+              "darwin-universal": {
+                "signature": "${MAC_SIG}",
+                "url": "${BASE}/${MAC_TAR}"
+              }
+            }
+          }
+          EOF
+
+          cat latest.json
+
+      - name: Attach manifest to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: latest.json
