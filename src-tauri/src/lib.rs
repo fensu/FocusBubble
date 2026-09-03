@@ -406,6 +406,22 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// macOS 全局鼠标位置（主显示器；NSEvent 为左下角原点，需翻转到左上角）。
+/// points 与 WebView CSS 像素同单位。多显示器支持在阶段 E 处理。
+#[cfg(target_os = "macos")]
+fn macos_mouse_position() -> (i32, i32) {
+    unsafe {
+        let location = objc2_app_kit::NSEvent::mouseLocation();
+        let main_height = objc2_app_kit::NSScreen::mainScreen()
+            .map(|screen| screen.frame().size.height)
+            .unwrap_or(0.0);
+        (
+            location.x.round() as i32,
+            (main_height - location.y).round() as i32,
+        )
+    }
+}
+
 fn tray_toggle_label(enabled: bool) -> &'static str {
     if enabled {
         "关闭效果"
@@ -550,19 +566,40 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let overlay = WebviewWindowBuilder::new(
-                app,
-                "overlay",
-                WebviewUrl::App("index.html#overlay".into()),
-            )
-            .title("Focus Bubble Overlay")
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .fullscreen(true)
-            .shadow(false)
-            .build()?;
+            let overlay = {
+                let builder = WebviewWindowBuilder::new(
+                    app,
+                    "overlay",
+                    WebviewUrl::App("index.html#overlay".into()),
+                )
+                .title("Focus Bubble Overlay")
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .shadow(false);
+
+                // Windows 无边框全屏；macOS 原生全屏会切 Space 并接管屏幕
+                // （菜单栏/Dock 消失、授权弹窗被挡），改为覆盖屏幕的无边框窗口。
+                #[cfg(not(target_os = "macos"))]
+                let builder = builder.fullscreen(true);
+                #[cfg(target_os = "macos")]
+                let builder = builder.resizable(false);
+
+                builder.build()?
+            };
+
+            #[cfg(target_os = "macos")]
+            if let Ok(Some(monitor)) = overlay.current_monitor() {
+                let _ = overlay.set_position(tauri::PhysicalPosition::new(
+                    monitor.position().x,
+                    monitor.position().y,
+                ));
+                let _ = overlay.set_size(tauri::PhysicalSize::new(
+                    monitor.size().width,
+                    monitor.size().height,
+                ));
+            }
 
             overlay.set_ignore_cursor_events(true)?;
 
@@ -696,19 +733,37 @@ pub fn run() {
 
             let handle = app.handle().clone();
             thread::spawn(move || {
-                let device_state = DeviceState::new();
+                #[cfg(target_os = "macos")]
+                {
+                    // device_query 在 macOS 依赖辅助功能权限（授权弹窗还会被 overlay 挡住），
+                    // 改用 NSEvent 被动查询全局鼠标，无需任何权限。
+                    loop {
+                        let (x, y) = macos_mouse_position();
+                        let _ = handle.emit_to(
+                            "overlay",
+                            "cursor-position",
+                            CursorPosition { x, y },
+                        );
+                        thread::sleep(Duration::from_millis(16));
+                    }
+                }
 
-                loop {
-                    let mouse = device_state.get_mouse();
-                    let _ = handle.emit_to(
-                        "overlay",
-                        "cursor-position",
-                        CursorPosition {
-                            x: mouse.coords.0,
-                            y: mouse.coords.1,
-                        },
-                    );
-                    thread::sleep(Duration::from_millis(16));
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let device_state = DeviceState::new();
+
+                    loop {
+                        let mouse = device_state.get_mouse();
+                        let _ = handle.emit_to(
+                            "overlay",
+                            "cursor-position",
+                            CursorPosition {
+                                x: mouse.coords.0,
+                                y: mouse.coords.1,
+                            },
+                        );
+                        thread::sleep(Duration::from_millis(16));
+                    }
                 }
             });
 

@@ -24,6 +24,7 @@ tauri-plugin-updater = "2"
 # 否则 Windows 下普通 cargo check 会被 tauri-build 拦截。
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
