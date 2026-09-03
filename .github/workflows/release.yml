@@ -175,12 +175,15 @@ jobs:
           BASE="https://github.com/fensu/FocusBubble/releases/download/${GITHUB_REF_NAME}"
           WIN_SETUP=$(basename "$(find windows -name '*x64-setup.exe' | head -1)")
           WIN_SIG=$(cat "$(find windows -name '*x64-setup.exe.sig' | head -1)")
+          # GitHub 上传资产时把文件名中的空格替换为点，URL 必须用点版本
+          WIN_SETUP=${WIN_SETUP// /.}
 
           MAC_TAR=""
           MAC_SIG=""
           if ls macos/*.tar.gz >/dev/null 2>&1 && ls macos/*.tar.gz.sig >/dev/null 2>&1; then
             MAC_TAR=$(basename "$(find macos -name '*.tar.gz' ! -name '*.sig' | head -1)")
             MAC_SIG=$(cat "$(find macos -name '*.tar.gz.sig' | head -1)")
+            MAC_TAR=${MAC_TAR// /.}
           else
             echo "::warning::macOS updater artifacts missing; latest.json will be windows-only"
           fi
