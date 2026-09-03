@@ -115,17 +115,22 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # dmg 供手动下载安装；updater 产物为 *.app.tar.gz + .sig
+      # app bundle 是 macOS 更新包（.app.tar.gz + .sig）的来源，必须显式包含
       - name: Build universal dmg and updater artifacts
-        run: npx tauri build --target universal-apple-darwin --bundles dmg
+        run: npx tauri build --target universal-apple-darwin --bundles app,dmg
 
       - name: Collect artifacts
         run: |
           mkdir -p dmg updater
           find src-tauri/target -name '*.dmg' -exec cp {} dmg/ \;
           find src-tauri/target \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*.tar.gz' -o -name '*.tar.gz.sig' \) -exec cp {} updater/ \;
+          echo "=== bundle outputs for diagnosis ==="
+          find src-tauri/target/universal-apple-darwin/release/bundle -type f 2>/dev/null | head -60
           if [ -z "$(ls dmg/*.dmg 2>/dev/null)" ]; then echo "::error::no dmg found"; exit 1; fi
-          if [ -z "$(ls updater/*.sig 2>/dev/null)" ]; then echo "::error::no updater signature found"; exit 1; fi
+          if [ -z "$(ls updater/*.sig 2>/dev/null)" ]; then
+            echo "::warning::no macOS updater signature; latest.json will be windows-only"
+            if [ -z "$(ls updater/ 2>/dev/null)" ]; then echo none > updater/README.txt; fi
+          fi
 
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
@@ -167,29 +172,40 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          BASE="https://github.com/fensu/FocusBubble/releases/download/${GITHUB_REF_NAME}"
           WIN_SETUP=$(basename "$(find windows -name '*x64-setup.exe' | head -1)")
           WIN_SIG=$(cat "$(find windows -name '*x64-setup.exe.sig' | head -1)")
-          MAC_TAR=$(basename "$(find macos -name '*.tar.gz' ! -name '*.sig' | head -1)")
-          MAC_SIG=$(cat "$(find macos -name '*.tar.gz.sig' | head -1)")
-          BASE="https://github.com/fensu/FocusBubble/releases/download/${GITHUB_REF_NAME}"
 
-          cat > latest.json <<EOF
-          {
-            "version": "${VERSION}",
-            "notes": "Focus Bubble ${VERSION}",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "windows-x86_64": {
-                "signature": "${WIN_SIG}",
-                "url": "${BASE}/${WIN_SETUP}"
-              },
-              "darwin-universal": {
-                "signature": "${MAC_SIG}",
-                "url": "${BASE}/${MAC_TAR}"
-              }
-            }
-          }
-          EOF
+          MAC_TAR=""
+          MAC_SIG=""
+          if ls macos/*.tar.gz >/dev/null 2>&1 && ls macos/*.tar.gz.sig >/dev/null 2>&1; then
+            MAC_TAR=$(basename "$(find macos -name '*.tar.gz' ! -name '*.sig' | head -1)")
+            MAC_SIG=$(cat "$(find macos -name '*.tar.gz.sig' | head -1)")
+          else
+            echo "::warning::macOS updater artifacts missing; latest.json will be windows-only"
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg wsig "$WIN_SIG" \
+            --arg wurl "$BASE/$WIN_SETUP" \
+            --arg dsig "$MAC_SIG" \
+            --arg durl "${MAC_TAR:+$BASE/$MAC_TAR}" \
+            '{
+              version: $version,
+              notes: ("Focus Bubble " + $version),
+              pub_date: $date,
+              platforms: (if $dsig != ""
+                then {
+                  "windows-x86_64": { signature: $wsig, url: $wurl },
+                  "darwin-universal": { signature: $dsig, url: $durl }
+                }
+                else {
+                  "windows-x86_64": { signature: $wsig, url: $wurl }
+                }
+              end)
+            }' > latest.json
 
           cat latest.json
 
