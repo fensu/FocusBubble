@@ -110,3 +110,11 @@ src-tauri/src/
   renderer/mod.rs     渲染参数模型与 OverlayRenderer 抽象
 docs/gpu-blur-architecture.md   架构与设计约束文档
 ```
+
+---
+
+## 社区认可 / Community
+
+本开源项目已获 [LINUX DO](https://linux.do/) 社区认可。
+
+An open source project recognized by the [LINUX DO](https://linux.do/) community.
