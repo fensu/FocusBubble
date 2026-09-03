@@ -120,7 +120,10 @@ const copy = {
     resetDefaults: '恢复默认',
     lowMotion: '低动态',
     strongFocus: '强聚焦',
-    updateAvailable: '有新版本',
+    checkUpdates: '检查更新',
+    upToDate: '已是最新',
+    installUpdate: '安装更新',
+    updateDownloading: '下载中',
     updateInstalling: '正在更新…',
     preview: '遮罩预览',
     settings: '设置',
@@ -185,7 +188,10 @@ const copy = {
     resetDefaults: 'Reset defaults',
     lowMotion: 'Low motion',
     strongFocus: 'Strong focus',
-    updateAvailable: 'Update available',
+    checkUpdates: 'Check for updates',
+    upToDate: 'Up to date',
+    installUpdate: 'Install update',
+    updateDownloading: 'Downloading',
     updateInstalling: 'Updating…',
     preview: 'Mask preview',
     settings: 'Settings',
@@ -250,7 +256,10 @@ const copy = {
     resetDefaults: 'デフォルトに戻す',
     lowMotion: '低ダイナミック',
     strongFocus: '強フォーカス',
-    updateAvailable: '更新あり',
+    checkUpdates: '更新を確認',
+    upToDate: '最新です',
+    installUpdate: '更新をインストール',
+    updateDownloading: 'ダウンロード中',
     updateInstalling: '更新中…',
     preview: 'マスクプレビュー',
     settings: '設定',
@@ -315,7 +324,10 @@ const copy = {
     resetDefaults: '기본값 복원',
     lowMotion: '저 다이내믹',
     strongFocus: '강한 포커스',
-    updateAvailable: '업데이트 있음',
+    checkUpdates: '업데이트 확인',
+    upToDate: '최신 버전입니다',
+    installUpdate: '업데이트 설치',
+    updateDownloading: '다운로드 중',
     updateInstalling: '업데이트 중…',
     preview: '마스크 미리보기',
     settings: '설정',
@@ -380,7 +392,10 @@ const copy = {
     resetDefaults: 'Standardwerte',
     lowMotion: 'Ruhig',
     strongFocus: 'Starker Fokus',
-    updateAvailable: 'Update verfügbar',
+    checkUpdates: 'Nach Updates suchen',
+    upToDate: 'Aktuell',
+    installUpdate: 'Update installieren',
+    updateDownloading: 'Wird geladen',
     updateInstalling: 'Aktualisiere…',
     preview: 'Masken-Vorschau',
     settings: 'Einstellungen',
@@ -445,7 +460,10 @@ const copy = {
     resetDefaults: 'Valeurs par défaut',
     lowMotion: 'Faible mouvement',
     strongFocus: 'Focus intense',
-    updateAvailable: 'Mise à jour',
+    checkUpdates: 'Rechercher des mises à jour',
+    upToDate: 'À jour',
+    installUpdate: 'Installer la mise à jour',
+    updateDownloading: 'Téléchargement',
     updateInstalling: 'Mise à jour…',
     preview: 'Aperçu du masque',
     settings: 'Réglages',
@@ -510,7 +528,10 @@ const copy = {
     resetDefaults: 'Valores predeterminados',
     lowMotion: 'Movimiento bajo',
     strongFocus: 'Enfoque fuerte',
-    updateAvailable: 'Actualización',
+    checkUpdates: 'Buscar actualizaciones',
+    upToDate: 'Actualizado',
+    installUpdate: 'Instalar actualización',
+    updateDownloading: 'Descargando',
     updateInstalling: 'Actualizando…',
     preview: 'Vista previa de máscara',
     settings: 'Ajustes',
@@ -596,6 +617,8 @@ function ControlPanel() {
   const [passthroughBusy, setPassthroughBusy] = useState(false)
   const [updateVersion, setUpdateVersion] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
+  const [checkState, setCheckState] = useState<'checking' | 'idle' | 'up-to-date'>('idle')
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null)
   const t = copy[settings.language]
 
   useEffect(() => {
@@ -654,24 +677,29 @@ function ControlPanel() {
     )
   }, [settings.closeToTray])
 
-  // 启动时检查应用更新（浏览器预览 / 非打包环境下静默跳过）。
-  useEffect(() => {
-    let cancelled = false
+  // 手动检查更新：发现新版本后出现安装按钮；无更新时按钮短暂显示"已是最新"。
+  const checkForUpdates = async () => {
+    if (checkState === 'checking' || updateBusy) return
 
-    import('@tauri-apps/plugin-updater')
-      .then(({ check }) => check())
-      .then((update) => {
-        if (!cancelled && update?.available) {
-          setUpdateVersion(update.version)
-        }
-      })
-      .catch(() => undefined)
-
-    return () => {
-      cancelled = true
+    setCheckState('checking')
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater')
+      const update = await check()
+      if (update?.available) {
+        setUpdateVersion(update.version)
+        setCheckState('idle')
+      } else {
+        setUpdateVersion(null)
+        setCheckState('up-to-date')
+        window.setTimeout(() => setCheckState('idle'), 2500)
+      }
+    } catch (error) {
+      console.error('update check failed:', error)
+      setCheckState('idle')
     }
-  }, [])
+  }
 
+  // 后台下载 + 自动安装 + 重启；按钮上实时显示下载进度。
   const installUpdate = async () => {
     if (!updateVersion || updateBusy) return
 
@@ -680,7 +708,20 @@ function ControlPanel() {
       const { check } = await import('@tauri-apps/plugin-updater')
       const update = await check()
       if (update?.available) {
-        await update.downloadAndInstall()
+        let total = 0
+        let downloaded = 0
+        await update.downloadAndInstall((event) => {
+          if (event.event === 'Started' && event.data.contentLength) {
+            total = event.data.contentLength
+          } else if (event.event === 'Progress') {
+            downloaded += event.data.chunkLength
+            if (total > 0) {
+              setDownloadProgress(
+                `${(downloaded / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB`,
+              )
+            }
+          }
+        })
         const { relaunch } = await import('@tauri-apps/plugin-process')
         await relaunch()
       }
@@ -688,6 +729,7 @@ function ControlPanel() {
       console.error('update install failed:', error)
     } finally {
       setUpdateBusy(false)
+      setDownloadProgress(null)
     }
   }
 
@@ -813,6 +855,19 @@ function ControlPanel() {
         <header className="topbar">
           <p className="eyebrow">Focus Bubble</p>
           <div className="topActions">
+            <button
+              type="button"
+              className="power"
+              onClick={checkForUpdates}
+              disabled={checkState === 'checking' || updateBusy}
+            >
+              <RefreshCw size={16} />
+              {checkState === 'checking'
+                ? `${t.checkUpdates}…`
+                : checkState === 'up-to-date'
+                  ? t.upToDate
+                  : t.checkUpdates}
+            </button>
             {updateVersion && (
               <button
                 type="button"
@@ -822,8 +877,10 @@ function ControlPanel() {
               >
                 <RefreshCw size={16} />
                 {updateBusy
-                  ? t.updateInstalling
-                  : `${t.updateAvailable} v${updateVersion}`}
+                  ? downloadProgress
+                    ? `${t.updateDownloading} ${downloadProgress}`
+                    : t.updateInstalling
+                  : `${t.installUpdate} v${updateVersion}`}
               </button>
             )}
             <label className="languageSelect">
