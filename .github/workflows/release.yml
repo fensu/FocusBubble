@@ -122,8 +122,10 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dmg updater
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dmg/
-          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz* updater/
+          find src-tauri/target -name '*.dmg' -exec cp {} dmg/ \;
+          find src-tauri/target \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*.tar.gz' -o -name '*.tar.gz.sig' \) -exec cp {} updater/ \;
+          if [ -z "$(ls dmg/*.dmg 2>/dev/null)" ]; then echo "::error::no dmg found"; exit 1; fi
+          if [ -z "$(ls updater/*.sig 2>/dev/null)" ]; then echo "::error::no updater signature found"; exit 1; fi
 
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
@@ -167,8 +169,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           WIN_SETUP=$(basename "$(find windows -name '*x64-setup.exe' | head -1)")
           WIN_SIG=$(cat "$(find windows -name '*x64-setup.exe.sig' | head -1)")
-          MAC_TAR=$(basename "$(find macos -name '*.app.tar.gz' | head -1)")
-          MAC_SIG=$(cat "$(find macos -name '*.app.tar.gz.sig' | head -1)")
+          MAC_TAR=$(basename "$(find macos -name '*.tar.gz' ! -name '*.sig' | head -1)")
+          MAC_SIG=$(cat "$(find macos -name '*.tar.gz.sig' | head -1)")
           BASE="https://github.com/fensu/FocusBubble/releases/download/${GITHUB_REF_NAME}"
 
           cat > latest.json <<EOF
