@@ -17,6 +17,11 @@ device_query = "4"
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = ["tray-icon"] }
 
+# macOS 透明窗口需要 private API；仅在 mac 目标启用，
+# 否则 Windows 下普通 cargo check 会被 tauri-build 拦截。
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
   "Win32_Foundation",
