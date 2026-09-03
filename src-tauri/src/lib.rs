@@ -285,6 +285,7 @@ struct GpuRendererParamsPayload {
     band_height: f32,
     spotlight_scale_x: f32,
     spotlight_scale_y: f32,
+    smoothing: f32,
 }
 
 #[tauri::command]
@@ -318,6 +319,7 @@ fn gpu_renderer_set_params(
         band_half_px: params.band_height * scale,
         spot_scale_x: params.spotlight_scale_x,
         spot_scale_y: params.spotlight_scale_y,
+        tracking_alpha: params.smoothing.clamp(0.01, 1.0),
     };
 
     let mut stored = state

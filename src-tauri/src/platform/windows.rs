@@ -671,6 +671,95 @@ impl Drop for GpuRenderer {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 视觉舒适度约束层
+//
+// 设计约束（docs/gpu-blur-architecture.md）：
+//   - 鼠标高速运动时：dim↓、清晰区↑、羽化↑、跟随速度↓，避免"探照灯"效应
+//   - 鼠标停止后参数缓慢收拢（速度 EMA 上升快、回落慢）
+//   - 阅读带模式纵向跟随更慢（按行吸附的感觉）
+//   - 外围暗度硬性封顶，不允许"接近全黑"的外围
+// ---------------------------------------------------------------------------
+
+struct ComfortState {
+    smoothed_mouse: [f32; 2],
+    smoothed_speed: f32,
+    last_raw_mouse: [f32; 2],
+    last_frame: Instant,
+    has_frame: bool,
+}
+
+impl ComfortState {
+    fn new() -> Self {
+        Self {
+            smoothed_mouse: [0.0; 2],
+            smoothed_speed: 0.0,
+            last_raw_mouse: [0.0; 2],
+            last_frame: Instant::now(),
+            has_frame: false,
+        }
+    }
+}
+
+/// 输入用户原始参数和原始鼠标位置，输出平滑后的鼠标位置和当帧生效参数。
+fn update_comfort(
+    raw_params: &GpuRendererParams,
+    raw_mouse: [f32; 2],
+    comfort: &mut ComfortState,
+) -> ([f32; 2], GpuRendererParams) {
+    let mut effective = *raw_params;
+    let now = Instant::now();
+
+    if !comfort.has_frame {
+        comfort.smoothed_mouse = raw_mouse;
+        comfort.last_raw_mouse = raw_mouse;
+        comfort.last_frame = now;
+        comfort.has_frame = true;
+        return (raw_mouse, effective);
+    }
+
+    let dt = now
+        .duration_since(comfort.last_frame)
+        .as_secs_f32()
+        .clamp(1.0 / 240.0, 0.25);
+    let dx = raw_mouse[0] - comfort.last_raw_mouse[0];
+    let dy = raw_mouse[1] - comfort.last_raw_mouse[1];
+    let speed = (dx * dx + dy * dy).sqrt() / dt;
+
+    // 速度 EMA：抬起快（0.35），回落慢（0.06）——停止后逐渐收拢而不是瞬间收紧。
+    let speed_alpha = if speed > comfort.smoothed_speed {
+        0.35
+    } else {
+        0.06
+    };
+    comfort.smoothed_speed += (speed - comfort.smoothed_speed) * speed_alpha;
+    comfort.last_raw_mouse = raw_mouse;
+    comfort.last_frame = now;
+
+    // 3600 px/s 接近全开；smoothstep 让过渡无硬拐点。
+    let t = (comfort.smoothed_speed / 3600.0).clamp(0.0, 1.0);
+    let ease = t * t * (3.0 - 2.0 * t);
+
+    // 低通跟随：速度越高跟随越慢（清晰区追着鼠标走）。
+    let tracking = raw_params.tracking_alpha * (1.0 - 0.7 * ease);
+    let (alpha_x, alpha_y) = if raw_params.mode >= 1 {
+        (tracking, tracking * 0.5)
+    } else {
+        (tracking, tracking)
+    };
+    comfort.smoothed_mouse[0] += (raw_mouse[0] - comfort.smoothed_mouse[0]) * alpha_x.clamp(0.0, 1.0);
+    comfort.smoothed_mouse[1] += (raw_mouse[1] - comfort.smoothed_mouse[1]) * alpha_y.clamp(0.0, 1.0);
+
+    // 速度自适应参数：高速时更柔和、更亮、更大。
+    effective.dim = (raw_params.dim * (1.0 - 0.6 * ease)).min(0.7);
+    effective.radius = raw_params.radius * (1.0 + 0.8 * ease);
+    effective.band_half_px = raw_params.band_half_px * (1.0 + 0.8 * ease);
+    effective.feather = raw_params.feather + 260.0 * ease;
+    effective.blur_px = raw_params.blur_px * (1.0 - 0.5 * ease);
+
+    (comfort.smoothed_mouse, effective)
+}
+
 fn run_capture_display_loop(
     hwnd: SendHwnd,
     hmonitor: SendHMonitor,
@@ -703,6 +792,7 @@ fn run_capture_display_loop(
     let mut frames_presented: u64 = 0;
     let mut second_frames: u64 = 0;
     let mut second_start = Instant::now();
+    let mut comfort = ComfortState::new();
 
     let loop_error: Option<String> = loop {
         if stop_flag.load(Ordering::Relaxed) {
@@ -718,29 +808,32 @@ fn run_capture_display_loop(
 
         match objects.frame_pool.TryGetNextFrame() {
             Ok(frame) => {
-                let frame_params = *params
+                let raw_params = *params
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let mouse = mouse_position_in_monitor(hmonitor.0);
+                let raw_mouse = mouse_position_in_monitor(hmonitor.0);
+                let (smoothed_mouse, effective_params) =
+                    update_comfort(&raw_params, raw_mouse, &mut comfort);
 
                 if let Ok(mut applied) = status.applied_params.lock() {
                     *applied = Some(format!(
-                        "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={:.0} sx={:.2} sy={:.2} mouse={:.0},{:.0}",
-                        frame_params.enabled,
-                        frame_params.mode,
-                        frame_params.radius,
-                        frame_params.feather,
-                        frame_params.dim,
-                        frame_params.blur_px,
-                        frame_params.band_half_px,
-                        frame_params.spot_scale_x,
-                        frame_params.spot_scale_y,
-                        mouse[0],
-                        mouse[1]
+                        "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={:.0} sx={:.2} sy={:.2} mouse={:.0},{:.0} v={:.0}px/s",
+                        effective_params.enabled,
+                        effective_params.mode,
+                        effective_params.radius,
+                        effective_params.feather,
+                        effective_params.dim,
+                        effective_params.blur_px,
+                        effective_params.band_half_px,
+                        effective_params.spot_scale_x,
+                        effective_params.spot_scale_y,
+                        smoothed_mouse[0],
+                        smoothed_mouse[1],
+                        comfort.smoothed_speed
                     ));
                 }
 
-                match render_blur_frame(&objects, &frame, frame_params, mouse) {
+                match render_blur_frame(&objects, &frame, effective_params, smoothed_mouse) {
                     Ok(()) => {
                         frames_presented += 1;
                         second_frames += 1;

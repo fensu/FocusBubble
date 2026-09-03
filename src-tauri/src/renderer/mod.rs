@@ -46,6 +46,9 @@ pub struct GpuRendererParams {
     /// 气泡椭圆横向/纵向拉伸系数（无量纲，1.0 = 正圆）。
     pub spot_scale_x: f32,
     pub spot_scale_y: f32,
+    /// 每帧低通跟随系数（0-1），由前端 smoothing 直接映射。
+    /// 舒适度参数：让清晰区"追着鼠标走"而不是 1:1 抖动。
+    pub tracking_alpha: f32,
 }
 
 impl Default for GpuRendererParams {
@@ -53,13 +56,14 @@ impl Default for GpuRendererParams {
         Self {
             enabled: false,
             mode: 0,
-            radius: 240.0,
+            radius: 250.0,
             feather: 180.0,
-            dim: 0.55,
+            dim: 0.30,
             blur_px: 10.0,
             band_half_px: 280.0,
             spot_scale_x: 1.0,
             spot_scale_y: 1.0,
+            tracking_alpha: 0.14,
         }
     }
 }

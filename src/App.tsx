@@ -68,20 +68,39 @@ type GpuPrototypeStatus = {
   rendererBackend: string
 }
 
+// 视觉舒适度默认值：外围暗度温和（20–35% 区间）、宽羽化、慢跟随。
 const defaultSettings: FocusSettings = {
   enabled: true,
   mode: 'spotlight',
   language: 'zh-CN',
-  radius: 240,
+  radius: 250,
   feather: 180,
   blur: 10,
-  opacity: 0.55,
-  smoothing: 0.18,
+  opacity: 0.3,
+  smoothing: 0.14,
   readingHeight: 260,
   codeHeight: 110,
   spotlightScaleX: 1,
   spotlightScaleY: 1,
   closeToTray: true,
+}
+
+// 低动态模式：弱暗化 + 大羽化 + 慢跟随。
+const lowMotionPreset: Partial<FocusSettings> = {
+  radius: 300,
+  feather: 280,
+  blur: 12,
+  opacity: 0.2,
+  smoothing: 0.08,
+}
+
+// 强聚焦模式：更明显的遮罩对比，适合高干扰环境短时使用。
+const strongFocusPreset: Partial<FocusSettings> = {
+  radius: 220,
+  feather: 120,
+  blur: 16,
+  opacity: 0.55,
+  smoothing: 0.22,
 }
 
 const storageKey = 'focus-bubble-settings'
@@ -98,6 +117,8 @@ const copy = {
     modes: '模式',
     intensity: '强度',
     resetDefaults: '恢复默认',
+    lowMotion: '低动态',
+    strongFocus: '强聚焦',
     preview: '遮罩预览',
     settings: '设置',
     spotlight: '气泡',
@@ -159,6 +180,8 @@ const copy = {
     modes: 'Modes',
     intensity: 'Intensity',
     resetDefaults: 'Reset defaults',
+    lowMotion: 'Low motion',
+    strongFocus: 'Strong focus',
     preview: 'Mask preview',
     settings: 'Settings',
     spotlight: 'Bubble',
@@ -261,6 +284,7 @@ function ControlPanel() {
           settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight,
         spotlightScaleX: settings.spotlightScaleX,
         spotlightScaleY: settings.spotlightScaleY,
+        smoothing: settings.smoothing,
       },
     }).catch((error) => console.error('gpu_renderer_set_params failed:', error))
   }, [settings])
@@ -389,6 +413,10 @@ function ControlPanel() {
     setSettings((current) => ({ ...defaultSettings, language: current.language }))
   }
 
+  const applyPreset = (preset: Partial<FocusSettings>) => {
+    setSettings((current) => ({ ...current, ...preset }))
+  }
+
   const modeDetails = useMemo(
     () => ({
       spotlight: {
@@ -486,6 +514,20 @@ function ControlPanel() {
             <div className="groupHeader">
               <SlidersHorizontal size={18} />
               <span>{t.intensity}</span>
+              <button
+                type="button"
+                className="headerAction"
+                onClick={() => applyPreset(lowMotionPreset)}
+              >
+                {t.lowMotion}
+              </button>
+              <button
+                type="button"
+                className="headerAction"
+                onClick={() => applyPreset(strongFocusPreset)}
+              >
+                {t.strongFocus}
+              </button>
               <button type="button" className="headerAction" onClick={resetDefaults}>
                 {t.resetDefaults}
               </button>
@@ -940,18 +982,47 @@ function FocusOverlay() {
       context.setTransform(ratio, 0, 0, ratio, 0, 0)
     }
 
+    // 视觉舒适度层状态（与 Rust 侧 update_comfort 同一套规则）。
+    const comfort = {
+      speed: 0,
+      lastRaw: { ...cursor.current },
+      lastTime: performance.now(),
+    }
+
     const draw = () => {
       const { width, height } = canvas.getBoundingClientRect()
       const target = cursor.current
       const current = smooth.current
-      current.x += (target.x - current.x) * settings.smoothing
-      current.y += (target.y - current.y) * settings.smoothing
+
+      // 速度 EMA：抬升快、回落慢，停止后逐渐收拢。
+      const now = performance.now()
+      const dt = Math.max((now - comfort.lastTime) / 1000, 1 / 240)
+      const speed =
+        Math.hypot(target.x - comfort.lastRaw.x, target.y - comfort.lastRaw.y) / dt
+      const speedAlpha = speed > comfort.speed ? 0.35 : 0.06
+      comfort.speed += (speed - comfort.speed) * speedAlpha
+      comfort.lastRaw = { ...target }
+      comfort.lastTime = now
+
+      const t = Math.min(comfort.speed / 3600, 1)
+      const ease = t * t * (3 - 2 * t)
+
+      // 高速时跟随更慢；带状模式纵向减半（按行吸附的感觉）。
+      const tracking = settings.smoothing * (1 - 0.7 * ease)
+      current.x += (target.x - current.x) * tracking
+      current.y +=
+        (target.y - current.y) * (settings.mode === 'spotlight' ? tracking : tracking * 0.5)
+
+      // 高速时：暗度↓、清晰区↑、羽化↑。
+      const effectiveOpacity = Math.min(settings.opacity * (1 - 0.6 * ease), 0.7)
+      const effectiveRadius = settings.radius * (1 + 0.8 * ease)
+      const effectiveFeather = settings.feather + 260 * ease
 
       context.clearRect(0, 0, width, height)
 
       if (settings.enabled) {
         context.save()
-        context.fillStyle = `rgba(12, 16, 20, ${settings.opacity})`
+        context.fillStyle = `rgba(12, 16, 20, ${effectiveOpacity})`
         context.fillRect(0, 0, width, height)
         context.globalCompositeOperation = 'destination-out'
 
@@ -963,10 +1034,10 @@ function FocusOverlay() {
           const gradient = context.createRadialGradient(
             0,
             0,
-            Math.max(1, settings.radius * 0.62),
+            Math.max(1, effectiveRadius * 0.62),
             0,
             0,
-            settings.radius + settings.feather,
+            effectiveRadius + effectiveFeather,
           )
           gradient.addColorStop(0, 'rgba(0, 0, 0, 1)')
           gradient.addColorStop(0.58, 'rgba(0, 0, 0, 0.92)')
@@ -978,7 +1049,8 @@ function FocusOverlay() {
         }
 
         if (settings.mode === 'reading' || settings.mode === 'code') {
-          const bandHeight = settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight
+          const bandBase = settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight
+          const bandHeight = bandBase * (1 + 0.8 * ease)
           const gradient = context.createLinearGradient(0, current.y - bandHeight, 0, current.y + bandHeight)
           gradient.addColorStop(0, 'rgba(0, 0, 0, 0)')
           gradient.addColorStop(0.28, 'rgba(0, 0, 0, 1)')
