@@ -240,15 +240,8 @@ fn render_mask_pixels(
         }
     }
 
-    // AppKit 非翻转坐标系：图像 y=0 在视图底部，本函数按顶部原点计算，
-    // 输出前垂直翻转，否则清晰区出现在鼠标的镜像位置。
-    let mut flipped = vec![0u8; MASK_WIDTH * MASK_HEIGHT];
-    for y in 0..MASK_HEIGHT {
-        let source_row = MASK_HEIGHT - 1 - y;
-        flipped[y * MASK_WIDTH..][..MASK_WIDTH]
-            .copy_from_slice(&data[source_row * MASK_WIDTH..][..MASK_WIDTH]);
-    }
-
-    flipped
+    // 实测确认：maskImage 按图像正立渲染（顶行在屏幕顶部），top-left 原点
+    // 直出即可；不要做垂直翻转（Y 会镜像到鼠标另一侧）。
+    data
 }
 
