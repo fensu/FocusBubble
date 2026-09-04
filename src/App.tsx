@@ -23,23 +23,29 @@ import './App.css'
 type FocusMode = 'spotlight' | 'band'
 type Language = 'zh-CN' | 'en-US' | 'ja-JP' | 'ko-KR' | 'de-DE' | 'fr-FR' | 'es-ES'
 
+// 参数按模式分离：气泡/横带各自的羽化、模糊、暗度、平滑互不影响，
+// 只有效果开关、语言、关闭行为等全局项共享。
 type FocusSettings = {
   enabled: boolean
   mode: FocusMode
   language: Language
-  radius: number
-  feather: number
-  blur: number
-  opacity: number
-  smoothing: number
-  bandHeight: number
-  bandWidth: number
-  offsetX: number
-  offsetY: number
-  spotlightScaleX: number
-  spotlightScaleY: number
   closeToTray: boolean
   warningAcknowledged: boolean
+  spotRadius: number
+  spotFeather: number
+  spotBlur: number
+  spotOpacity: number
+  spotSmoothing: number
+  spotScaleX: number
+  spotScaleY: number
+  bandHeight: number
+  bandWidth: number
+  bandOffsetX: number
+  bandOffsetY: number
+  bandFeather: number
+  bandBlur: number
+  bandOpacity: number
+  bandSmoothing: number
 }
 
 type CursorPoint = {
@@ -93,45 +99,40 @@ const defaultSettings: FocusSettings = {
   warningAcknowledged: false,
   mode: 'spotlight',
   language: 'zh-CN',
-  radius: 250,
-  feather: 180,
-  blur: 10,
-  opacity: 0.3,
-  smoothing: 0.14,
+  closeToTray: true,
+  spotRadius: 250,
+  spotFeather: 180,
+  spotBlur: 10,
+  spotOpacity: 0.3,
+  spotSmoothing: 0.14,
+  spotScaleX: 1,
+  spotScaleY: 1,
   bandHeight: 400,
   bandWidth: 1920,
-  offsetX: 0,
-  offsetY: 0,
-  spotlightScaleX: 1,
-  spotlightScaleY: 1,
-  closeToTray: true,
+  bandOffsetX: 0,
+  bandOffsetY: 0,
+  bandFeather: 240,
+  bandBlur: 10,
+  bandOpacity: 0.3,
+  bandSmoothing: 0.14,
 }
 
-// 低动态模式：弱暗化 + 大羽化 + 慢跟随。
-const lowMotionPreset: Partial<FocusSettings> = {
-  radius: 300,
-  feather: 280,
-  blur: 12,
-  opacity: 0.2,
-  smoothing: 0.08,
+// 预设按模式分离：只作用于当前模式的参数。
+const lowMotionPreset: Record<FocusMode, Partial<FocusSettings>> = {
+  spotlight: { spotRadius: 300, spotFeather: 280, spotBlur: 12, spotOpacity: 0.2, spotSmoothing: 0.08 },
+  band: { bandFeather: 300, bandBlur: 12, bandOpacity: 0.2, bandSmoothing: 0.08 },
 }
 
 // 强聚焦模式：更明显的遮罩对比，适合高干扰环境短时使用。
 // macOS 模糊强度由系统 material 决定，过强的暗度+模糊叠加会不可用，单独给温和值。
-const strongFocusPreset: Partial<FocusSettings> = IS_MAC
+const strongFocusPreset: Record<FocusMode, Partial<FocusSettings>> = IS_MAC
   ? {
-      radius: 240,
-      feather: 220,
-      blur: 14,
-      opacity: 0.45,
-      smoothing: 0.2,
+      spotlight: { spotRadius: 240, spotFeather: 220, spotBlur: 14, spotOpacity: 0.45, spotSmoothing: 0.2 },
+      band: { bandFeather: 220, bandBlur: 14, bandOpacity: 0.4, bandSmoothing: 0.2 },
     }
   : {
-      radius: 220,
-      feather: 120,
-      blur: 16,
-      opacity: 0.55,
-      smoothing: 0.22,
+      spotlight: { spotRadius: 220, spotFeather: 120, spotBlur: 16, spotOpacity: 0.55, spotSmoothing: 0.22 },
+      band: { bandFeather: 140, bandBlur: 16, bandOpacity: 0.55, bandSmoothing: 0.22 },
     }
 
 const copy = {
@@ -688,21 +689,45 @@ function loadSettings(): FocusSettings {
     const saved = localStorage.getItem(storageKey)
     if (!saved) return defaultSettings
     const parsed = JSON.parse(saved) as Record<string, unknown>
-    // 阅读/代码模式已合并为 band；带高从旧半高值迁移为全高。
-    if (parsed.mode === 'reading' || parsed.mode === 'code') {
-      parsed.mode = 'band'
-      if (typeof parsed.bandHeight !== 'number') {
-        const half = (parsed.mode === 'band' && typeof parsed.readingHeight === 'number')
-          ? parsed.readingHeight
-          : typeof parsed.codeHeight === 'number'
-            ? parsed.codeHeight
-            : 200
-        parsed.bandHeight = half * 2
-      }
-      delete parsed.readingHeight
-      delete parsed.codeHeight
+    // v0.1 之前为扁平字段：迁移到按模式分离的结构（共享值复制到两个模式）。
+    const legacy = parsed as Record<string, number | string | boolean>
+    if (typeof legacy.feather === 'number') {
+      const feather = legacy.feather
+      const blur = typeof legacy.blur === 'number' ? legacy.blur : defaultSettings.spotBlur
+      const opacity = typeof legacy.opacity === 'number' ? legacy.opacity : defaultSettings.spotOpacity
+      const smoothing = typeof legacy.smoothing === 'number' ? legacy.smoothing : defaultSettings.spotSmoothing
+      parsed.spotFeather ??= feather
+      parsed.bandFeather ??= feather
+      parsed.spotBlur ??= blur
+      parsed.bandBlur ??= blur
+      parsed.spotOpacity ??= opacity
+      parsed.bandOpacity ??= opacity
+      parsed.spotSmoothing ??= smoothing
+      parsed.bandSmoothing ??= smoothing
     }
-    return { ...defaultSettings, ...parsed }
+    if (typeof legacy.radius === 'number') parsed.spotRadius ??= legacy.radius
+    if (typeof legacy.spotlightScaleX === 'number') parsed.spotScaleX ??= legacy.spotlightScaleX
+    if (typeof legacy.spotlightScaleY === 'number') parsed.spotScaleY ??= legacy.spotlightScaleY
+    if (typeof legacy.offsetX === 'number') parsed.bandOffsetX ??= legacy.offsetX
+    if (typeof legacy.offsetY === 'number') parsed.bandOffsetY ??= legacy.offsetY
+    if (legacy.mode === 'reading' || legacy.mode === 'code') {
+      parsed.mode = 'band'
+      if (typeof parsed.bandHeight !== 'number' && typeof legacy.readingHeight === 'number') {
+        parsed.bandHeight = (legacy.readingHeight as number) * 2
+      }
+    }
+    delete parsed.radius
+    delete parsed.feather
+    delete parsed.blur
+    delete parsed.opacity
+    delete parsed.smoothing
+    delete parsed.spotlightScaleX
+    delete parsed.spotlightScaleY
+    delete parsed.offsetX
+    delete parsed.offsetY
+    delete parsed.readingHeight
+    delete parsed.codeHeight
+    return { ...defaultSettings, ...(parsed as Partial<FocusSettings>) }
   } catch {
     return defaultSettings
   }
@@ -744,17 +769,18 @@ function ControlPanel() {
       params: {
         enabled: settings.enabled,
         mode: settings.mode,
-        radius: settings.radius,
-        feather: settings.feather,
-        dim: settings.opacity,
-        blur: settings.blur,
+        radius: settings.mode === 'spotlight' ? settings.spotRadius : settings.bandWidth / 2,
+        feather: settings.mode === 'spotlight' ? settings.spotFeather : settings.bandFeather,
+        dim: settings.mode === 'spotlight' ? settings.spotOpacity : settings.bandOpacity,
+        blur: settings.mode === 'spotlight' ? settings.spotBlur : settings.bandBlur,
         bandHeight: settings.bandHeight,
         bandWidth: settings.bandWidth,
-        offsetX: settings.offsetX,
-        offsetY: settings.offsetY,
-        spotlightScaleX: settings.spotlightScaleX,
-        spotlightScaleY: settings.spotlightScaleY,
-        smoothing: settings.smoothing,
+        offsetX: settings.bandOffsetX,
+        offsetY: settings.bandOffsetY,
+        spotlightScaleX: settings.spotScaleX,
+        spotlightScaleY: settings.spotScaleY,
+        smoothing:
+          settings.mode === 'spotlight' ? settings.spotSmoothing : settings.bandSmoothing,
       },
     }).catch((error) => console.error('gpu_renderer_set_params failed:', error))
   }, [settings])
@@ -946,7 +972,7 @@ function ControlPanel() {
     setSettings((current) => ({ ...current, ...preset }))
   }
 
-  const nudgeOffset = (key: 'offsetX' | 'offsetY', delta: number) => {
+  const nudgeOffset = (key: 'bandOffsetX' | 'bandOffsetY', delta: number) => {
     setSettings((current) => ({
       ...current,
       [key]: Math.max(-600, Math.min(600, current[key] + delta)),
@@ -1101,14 +1127,14 @@ function ControlPanel() {
               <button
                 type="button"
                 className="headerAction"
-                onClick={() => applyPreset(lowMotionPreset)}
+                onClick={() => applyPreset(lowMotionPreset[settings.mode])}
               >
                 {t.lowMotion}
               </button>
               <button
                 type="button"
                 className="headerAction"
-                onClick={() => applyPreset(strongFocusPreset)}
+                onClick={() => applyPreset(strongFocusPreset[settings.mode])}
               >
                 {t.strongFocus}
               </button>
@@ -1126,9 +1152,9 @@ function ControlPanel() {
                     min={40}
                     max={screenLimits.radiusMax}
                     step={10}
-                    value={settings.radius}
+                    value={settings.spotRadius}
                     suffix="px"
-                    onChange={(value) => update('radius', value)}
+                    onChange={(value) => update('spotRadius', value)}
                   />
                   <RangeControl
                     icon={<Crosshair size={17} />}
@@ -1136,9 +1162,9 @@ function ControlPanel() {
                     min={0.3}
                     max={3}
                     step={0.05}
-                    value={settings.spotlightScaleX}
+                    value={settings.spotScaleX}
                     suffix=""
-                    onChange={(value) => update('spotlightScaleX', value)}
+                    onChange={(value) => update('spotScaleX', value)}
                   />
                   <RangeControl
                     icon={<Crosshair size={17} />}
@@ -1146,9 +1172,49 @@ function ControlPanel() {
                     min={0.3}
                     max={3}
                     step={0.05}
-                    value={settings.spotlightScaleY}
+                    value={settings.spotScaleY}
                     suffix=""
-                    onChange={(value) => update('spotlightScaleY', value)}
+                    onChange={(value) => update('spotScaleY', value)}
+                  />
+                  <RangeControl
+                    icon={<Eye size={17} />}
+                    label={t.feather}
+                    min={0}
+                    max={screenLimits.radiusMax}
+                    step={10}
+                    value={settings.spotFeather}
+                    suffix="px"
+                    onChange={(value) => update('spotFeather', value)}
+                  />
+                  <RangeControl
+                    icon={<Eye size={17} />}
+                    label={t.blur}
+                    min={0}
+                    max={28}
+                    step={1}
+                    value={settings.spotBlur}
+                    suffix="px"
+                    onChange={(value) => update('spotBlur', value)}
+                  />
+                  <RangeControl
+                    icon={<Gauge size={17} />}
+                    label={t.opacity}
+                    min={0.18}
+                    max={0.82}
+                    step={0.02}
+                    value={settings.spotOpacity}
+                    suffix=""
+                    onChange={(value) => update('spotOpacity', value)}
+                  />
+                  <RangeControl
+                    icon={<MousePointer2 size={17} />}
+                    label={t.smoothing}
+                    min={0.04}
+                    max={0.36}
+                    step={0.02}
+                    value={settings.spotSmoothing}
+                    suffix=""
+                    onChange={(value) => update('spotSmoothing', value)}
                   />
                 </>
               )}
@@ -1182,11 +1248,11 @@ function ControlPanel() {
                     </span>
                     <div className="remotePad">
                       <span />
-                      <button type="button" onClick={() => nudgeOffset('offsetY', -20)}>
+                      <button type="button" onClick={() => nudgeOffset('bandOffsetY', -20)}>
                         <ChevronUp size={15} />
                       </button>
                       <span />
-                      <button type="button" onClick={() => nudgeOffset('offsetX', -20)}>
+                      <button type="button" onClick={() => nudgeOffset('bandOffsetX', -20)}>
                         <ChevronLeft size={15} />
                       </button>
                       <button
@@ -1194,71 +1260,71 @@ function ControlPanel() {
                         className="remoteReset"
                         title={t.resetOffset}
                         onClick={() => {
-                          update('offsetX', 0)
-                          update('offsetY', 0)
+                          update('bandOffsetX', 0)
+                          update('bandOffsetY', 0)
                         }}
                       >
                         <RotateCcw size={14} />
                       </button>
-                      <button type="button" onClick={() => nudgeOffset('offsetX', 20)}>
+                      <button type="button" onClick={() => nudgeOffset('bandOffsetX', 20)}>
                         <ChevronRight size={15} />
                       </button>
                       <span />
-                      <button type="button" onClick={() => nudgeOffset('offsetY', 20)}>
+                      <button type="button" onClick={() => nudgeOffset('bandOffsetY', 20)}>
                         <ChevronDown size={15} />
                       </button>
                       <span />
                     </div>
                     <output>
-                      {settings.offsetX >= 0 ? '+' : ''}
-                      {Math.round(settings.offsetX)},{' '}
-                      {settings.offsetY >= 0 ? '+' : ''}
-                      {Math.round(settings.offsetY)}
+                      {settings.bandOffsetX >= 0 ? '+' : ''}
+                      {Math.round(settings.bandOffsetX)},{' '}
+                      {settings.bandOffsetY >= 0 ? '+' : ''}
+                      {Math.round(settings.bandOffsetY)}
                     </output>
                   </div>
+                  <RangeControl
+                    icon={<Eye size={17} />}
+                    label={t.feather}
+                    min={0}
+                    max={screenLimits.radiusMax}
+                    step={10}
+                    value={settings.bandFeather}
+                    suffix="px"
+                    onChange={(value) => update('bandFeather', value)}
+                  />
+                  <RangeControl
+                    icon={<Eye size={17} />}
+                    label={t.blur}
+                    min={0}
+                    max={28}
+                    step={1}
+                    value={settings.bandBlur}
+                    suffix="px"
+                    onChange={(value) => update('bandBlur', value)}
+                  />
+                  <RangeControl
+                    icon={<Gauge size={17} />}
+                    label={t.opacity}
+                    min={0.18}
+                    max={0.82}
+                    step={0.02}
+                    value={settings.bandOpacity}
+                    suffix=""
+                    onChange={(value) => update('bandOpacity', value)}
+                  />
+                  <RangeControl
+                    icon={<MousePointer2 size={17} />}
+                    label={t.smoothing}
+                    min={0.04}
+                    max={0.36}
+                    step={0.02}
+                    value={settings.bandSmoothing}
+                    suffix=""
+                    onChange={(value) => update('bandSmoothing', value)}
+                  />
                 </>
               )}
 
-              <RangeControl
-                icon={<Eye size={17} />}
-                label={t.feather}
-                min={0}
-                max={screenLimits.radiusMax}
-                step={10}
-                value={settings.feather}
-                suffix="px"
-                onChange={(value) => update('feather', value)}
-              />
-              <RangeControl
-                icon={<Eye size={17} />}
-                label={t.blur}
-                min={0}
-                max={28}
-                step={1}
-                value={settings.blur}
-                suffix="px"
-                onChange={(value) => update('blur', value)}
-              />
-              <RangeControl
-                icon={<Gauge size={17} />}
-                label={t.opacity}
-                min={0.18}
-                max={0.82}
-                step={0.02}
-                value={settings.opacity}
-                suffix=""
-                onChange={(value) => update('opacity', value)}
-              />
-              <RangeControl
-                icon={<MousePointer2 size={17} />}
-                label={t.smoothing}
-                min={0.04}
-                max={0.36}
-                step={0.02}
-                value={settings.smoothing}
-                suffix=""
-                onChange={(value) => update('smoothing', value)}
-              />
             </div>
 
             {gpuStatus && (
@@ -1564,17 +1630,18 @@ function FocusPreview({ settings }: { settings: FocusSettings }) {
         className={`previewMask ${settings.enabled ? '' : 'is-disabled'} ${settings.mode}`}
         style={
           {
-            '--preview-opacity': settings.opacity,
-            '--preview-radius': `${settings.radius / 5}px`,
-            '--preview-feather': `${settings.feather / 5}px`,
-            '--preview-rx': `${((settings.radius + settings.feather) / 5) * settings.spotlightScaleX}px`,
-            '--preview-ry': `${((settings.radius + settings.feather) / 5) * settings.spotlightScaleY}px`,
-            '--preview-inner': `${(settings.radius / Math.max(1, settings.radius + settings.feather)) * 100}%`,
-            '--preview-blur': `${settings.blur}px`,
+            '--preview-opacity':
+              settings.mode === 'spotlight' ? settings.spotOpacity : settings.bandOpacity,
+            '--preview-radius': `${settings.spotRadius / 5}px`,
+            '--preview-feather': `${(settings.mode === 'spotlight' ? settings.spotFeather : settings.bandFeather) / 5}px`,
+            '--preview-rx': `${((settings.spotRadius + settings.spotFeather) / 5) * settings.spotScaleX}px`,
+            '--preview-ry': `${((settings.spotRadius + settings.spotFeather) / 5) * settings.spotScaleY}px`,
+            '--preview-inner': `${(settings.spotRadius / Math.max(1, settings.spotRadius + settings.spotFeather)) * 100}%`,
+            '--preview-blur': `${settings.mode === 'spotlight' ? settings.spotBlur : settings.bandBlur}px`,
             '--band-w': `${settings.bandWidth / 5}px`,
             '--band-h': `${settings.bandHeight / 3}px`,
-            '--band-off-x': `${settings.offsetX / 5}px`,
-            '--band-off-y': `${settings.offsetY / 5}px`,
+            '--band-off-x': `${settings.bandOffsetX / 5}px`,
+            '--band-off-y': `${settings.bandOffsetY / 5}px`,
           } as CSSProperties
         }
       />
@@ -1697,15 +1764,19 @@ function FocusOverlay() {
       const ease = comfort.ease
 
       // 高速时跟随更慢；带状模式纵向减半（按行吸附的感觉）。
-      const tracking = settings.smoothing * (1 - 0.6 * ease)
+      const modeSmoothing =
+        settings.mode === 'spotlight' ? settings.spotSmoothing : settings.bandSmoothing
+      const tracking = modeSmoothing * (1 - 0.6 * ease)
       current.x += (target.x - current.x) * tracking
       current.y +=
         (target.y - current.y) * (settings.mode === 'spotlight' ? tracking : tracking * 0.5)
 
       // 速度自适应只作用于几何（轻微）：清晰区最多扩 25%，羽化最多 +140px。
-      const effectiveOpacity = Math.min(settings.opacity, 0.7)
-      const effectiveRadius = settings.radius * (1 + 0.25 * ease)
-      const effectiveFeather = settings.feather + 140 * ease
+      const modeOpacity = settings.mode === 'spotlight' ? settings.spotOpacity : settings.bandOpacity
+      const modeFeather = settings.mode === 'spotlight' ? settings.spotFeather : settings.bandFeather
+      const effectiveOpacity = Math.min(modeOpacity, 0.7)
+      const effectiveRadius = settings.spotRadius * (1 + 0.25 * ease)
+      const effectiveFeather = modeFeather + 140 * ease
 
       context.clearRect(0, 0, width, height)
 
@@ -1719,7 +1790,7 @@ function FocusOverlay() {
           // 圆形渐变配 scale 变换得到椭圆：半轴 = radius * scale。
           context.save()
           context.translate(current.x, current.y)
-          context.scale(settings.spotlightScaleX, settings.spotlightScaleY)
+          context.scale(settings.spotScaleX, settings.spotScaleY)
           const gradient = context.createRadialGradient(
             0,
             0,
@@ -1741,8 +1812,8 @@ function FocusOverlay() {
           const comfortScale = 1 + 0.25 * ease
           const bandWidth = settings.bandWidth * comfortScale
           const bandHeight = settings.bandHeight * comfortScale
-          const cx = current.x + settings.offsetX
-          const cy = current.y + settings.offsetY
+          const cx = current.x + settings.bandOffsetX
+          const cy = current.y + settings.bandOffsetY
           context.save()
           // 与 macOS mask / Windows shader 完全一致的矩形 smoothstep 羽化：
           // 逐圈累积挖洞（destination-out 累积 = 1-Π(1-α)），过渡几何与
