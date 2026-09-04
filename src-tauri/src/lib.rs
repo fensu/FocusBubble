@@ -610,6 +610,9 @@ pub fn run() {
                 // 标题置空：无边框全屏窗口在某些 Windows 组合下可能渲染出
                 // 顶部标题条，空标题至少不显示文字。
                 .title("")
+                // 显式透明背景色：修复 Win10 上 WebView2 透明窗口在窗口
+                // 移动/DWM 重合成后顶部出现渲染残留条的问题。
+                .background_color(tauri::webview::Color(0, 0, 0, 0))
                 .decorations(false)
                 .transparent(true)
                 .always_on_top(true)
