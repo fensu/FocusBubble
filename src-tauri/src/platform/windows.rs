@@ -817,6 +817,10 @@ fn build_capture_display_objects(
         .map_err(|error| format!("CreateCaptureSession failed: {error}"))?;
     // 系统捕获提示条会污染直通画面，尽量关掉；权限不足时忽略，不影响管线。
     let _ = session.SetIsBorderRequired(false);
+    // 捕获画面默认包含鼠标指针（捕获时刻的旧位置），与系统实时绘制的真实
+    // 光标叠加形成"残影"。关闭光标捕获后只保留真实光标（无延迟）。
+    // Win10 2004+ 支持；旧系统调用失败时维持现状。
+    let _ = session.SetIsCursorCaptureEnabled(false);
     session
         .StartCapture()
         .map_err(|error| format!("GraphicsCaptureSession::StartCapture failed: {error}"))?;
