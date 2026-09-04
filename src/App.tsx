@@ -1058,6 +1058,10 @@ function ControlPanel() {
           </div>
         </header>
 
+        <div className="statusWarning health topReminder">
+          <span>{t.healthReminder}</span>
+        </div>
+
         <div className="layout">
           <section className="previewPane" aria-label={t.preview}>
             <FocusPreview settings={settings} />
