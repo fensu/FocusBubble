@@ -1683,6 +1683,28 @@ function FocusOverlay() {
             context.rect(cx - bandWidth / 2, cy - bandHeight / 2, bandWidth, bandHeight)
           }
           context.fill()
+          // ctx.filter 在部分 WebKit 上可能无效，导致横带内部挖洞不完全、
+          // 整体偏暗；内缩一圈再实心补一次，保证带内彻底清晰。
+          context.filter = 'none'
+          const inset = Math.max(2, effectiveFeather * 0.4)
+          context.beginPath()
+          if (typeof context.roundRect === 'function') {
+            context.roundRect(
+              cx - bandWidth / 2 + inset,
+              cy - bandHeight / 2 + inset,
+              Math.max(1, bandWidth - inset * 2),
+              Math.max(1, bandHeight - inset * 2),
+              Math.max(1, bandHeight / 2 - inset),
+            )
+          } else {
+            context.rect(
+              cx - bandWidth / 2 + inset,
+              cy - bandHeight / 2 + inset,
+              Math.max(1, bandWidth - inset * 2),
+              Math.max(1, bandHeight - inset * 2),
+            )
+          }
+          context.fill()
           context.restore()
         }
 
