@@ -132,6 +132,8 @@ const strongFocusPreset: Partial<FocusSettings> = IS_MAC
 const copy = {
   'zh-CN': {
     running: '运行中',
+    maskOn: '效果开启',
+    maskOff: '效果关闭',
     paused: '已暂停',
     language: '语言',
     closeBehavior: '关闭时',
@@ -201,6 +203,8 @@ const copy = {
   },
   'en-US': {
     running: 'Running',
+    maskOn: 'Effects on',
+    maskOff: 'Effects off',
     paused: 'Paused',
     language: 'Language',
     closeBehavior: 'On close',
@@ -270,6 +274,8 @@ const copy = {
   },
   'ja-JP': {
     running: '実行中',
+    maskOn: '効果オン',
+    maskOff: '効果オフ',
     paused: '一時停止',
     language: '言語',
     closeBehavior: '閉じる時',
@@ -339,6 +345,8 @@ const copy = {
   },
   'ko-KR': {
     running: '실행 중',
+    maskOn: '효과 켬',
+    maskOff: '효과 끔',
     paused: '일시정지',
     language: '언어',
     closeBehavior: '닫을 때',
@@ -408,6 +416,8 @@ const copy = {
   },
   'de-DE': {
     running: 'Aktiv',
+    maskOn: 'Effekte an',
+    maskOff: 'Effekte aus',
     paused: 'Pausiert',
     language: 'Sprache',
     closeBehavior: 'Beim Schließen',
@@ -477,6 +487,8 @@ const copy = {
   },
   'fr-FR': {
     running: 'Actif',
+    maskOn: 'Effets activés',
+    maskOff: 'Effets désactivés',
     paused: 'En pause',
     language: 'Langue',
     closeBehavior: 'À la fermeture',
@@ -546,6 +558,8 @@ const copy = {
   },
   'es-ES': {
     running: 'Activo',
+    maskOn: 'Efectos activados',
+    maskOff: 'Efectos desactivados',
     paused: 'En pausa',
     language: 'Idioma',
     closeBehavior: 'Al cerrar',
@@ -967,7 +981,7 @@ function ControlPanel() {
               aria-pressed={settings.enabled}
             >
               <Power size={18} />
-              {settings.enabled ? t.running : t.paused}
+              {settings.enabled ? t.maskOn : t.maskOff}
             </button>
           </div>
         </header>
