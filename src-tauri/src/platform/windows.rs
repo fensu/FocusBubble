@@ -730,14 +730,17 @@ fn run_capture_display_loop(
 
                 if let Ok(mut applied) = status.applied_params.lock() {
                     *applied = Some(format!(
-                        "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={:.0} sx={:.2} sy={:.2} mouse={:.0},{:.0} v={:.0}px/s",
+                        "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={}x{}+{},{} sx={:.2} sy={:.2} mouse={:.0},{:.0} v={:.0}px/s",
                         effective_params.enabled,
                         effective_params.mode,
                         effective_params.radius,
                         effective_params.feather,
                         effective_params.dim,
                         effective_params.blur_px,
-                        effective_params.band_half_px,
+                        effective_params.band_half_w,
+                        effective_params.band_half_h,
+                        effective_params.band_offset_x,
+                        effective_params.band_offset_y,
                         effective_params.spot_scale_x,
                         effective_params.spot_scale_y,
                         smoothed_mouse[0],
@@ -869,20 +872,23 @@ const HLSL_SOURCE: &str = r#"
 cbuffer Params : register(b0)
 {
     // packoffset 按 16 字节寄存器编址，必须与 Rust 端 ShaderConstants
-    // 的字节布局一一对应（两个 float2 共享 c0，标量依次排到 c3）。
+    // 的字节布局一一对应。
     float2 screenSize : packoffset(c0.x);
     float2 mouse : packoffset(c0.z);
     float radius : packoffset(c1.x);
     float feather : packoffset(c1.y);
     float dim : packoffset(c1.z);
     float mode : packoffset(c1.w);
-    float bandHalf : packoffset(c2.x);
-    float blurMix : packoffset(c2.y);
-    float blurStepU : packoffset(c2.z);
-    float blurStepV : packoffset(c2.w);
-    float enabled : packoffset(c3.x);
-    float spotScaleX : packoffset(c3.y);
-    float spotScaleY : packoffset(c3.z);
+    float bandHalfH : packoffset(c2.x);
+    float bandHalfW : packoffset(c2.y);
+    float bandOffsetX : packoffset(c2.z);
+    float bandOffsetY : packoffset(c2.w);
+    float blurMix : packoffset(c3.x);
+    float blurStepU : packoffset(c3.y);
+    float blurStepV : packoffset(c3.z);
+    float enabled : packoffset(c3.w);
+    float spotScaleX : packoffset(c4.x);
+    float spotScaleY : packoffset(c4.y);
 };
 
 struct PSInput
@@ -944,7 +950,11 @@ float focusDistance(float2 pixel)
         float2 delta = (pixel - mouse) / float2(spotScaleX, spotScaleY);
         return length(delta);
     }
-    return abs(pixel.y - mouse.y);
+    // 横带：矩形有符号距离（等距线天然圆角），中心 = 鼠标 + 偏移。
+    float2 center = mouse + float2(bandOffsetX, bandOffsetY);
+    float dx = max(abs(pixel.x - center.x) - bandHalfW, 0.0);
+    float dy = max(abs(pixel.y - center.y) - bandHalfH, 0.0);
+    return sqrt(dx * dx + dy * dy);
 }
 
 float4 PSComposite(PSInput input) : SV_Target
@@ -958,7 +968,8 @@ float4 PSComposite(PSInput input) : SV_Target
 
     float4 blurred = blurTex.Sample(linearSampler, input.uv);
     float2 pixel = input.uv * screenSize;
-    float edge = (mode < 0.5) ? radius : bandHalf;
+    // 横带用矩形 SDF（矩形内为 0），edge 从 0 开始羽化。
+    float edge = (mode < 0.5) ? radius : 0.0;
     float mask = smoothstep(edge, edge + max(feather, 1.0), focusDistance(pixel));
     float3 periphery = lerp(original.rgb, blurred.rgb, blurMix) * (1.0 - dim);
     float3 color = lerp(original.rgb, periphery, mask);
@@ -968,7 +979,7 @@ float4 PSComposite(PSInput input) : SV_Target
 }
 "#;
 
-/// 与 HLSL cbuffer Params 一一对应；总大小必须是 16 的倍数。
+/// 与 HLSL cbuffer Params 一一对应；总大小必须是 16 的倍数（5 寄存器 = 80 字节）。
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct ShaderConstants {
@@ -978,14 +989,17 @@ struct ShaderConstants {
     feather: f32,
     dim: f32,
     mode: f32,
-    band_half: f32,
+    band_half_h: f32,
+    band_half_w: f32,
+    band_offset_x: f32,
+    band_offset_y: f32,
     blur_mix: f32,
     blur_step_u: f32,
     blur_step_v: f32,
     enabled: f32,
     spot_scale_x: f32,
     spot_scale_y: f32,
-    pad: [f32; 1],
+    pad: [f32; 2],
 }
 
 struct ShaderPipeline {
@@ -1265,14 +1279,17 @@ fn render_blur_frame(
         feather: params.feather,
         dim: params.dim,
         mode: params.mode as f32,
-        band_half: params.band_half_px,
+        band_half_h: params.band_half_h,
+        band_half_w: params.band_half_w,
+        band_offset_x: params.band_offset_x,
+        band_offset_y: params.band_offset_y,
         blur_mix: if params.blur_px >= 1.0 { 1.0 } else { 0.0 },
         blur_step_u: blur_span / quarter_width,
         blur_step_v: blur_span / quarter_height,
         enabled: if params.enabled { 1.0 } else { 0.0 },
         spot_scale_x: params.spot_scale_x.max(0.1),
         spot_scale_y: params.spot_scale_y.max(0.1),
-        pad: [0.0],
+        pad: [0.0; 2],
     };
 
     unsafe {

@@ -195,7 +195,7 @@ fn mask_update_loop(
             let corner = pixels[0];
             let scale = overlay.scale_factor().unwrap_or(1.0);
             eprintln!(
-                "[mac-blur] local_mouse={:.0},{:.0} screen={}x{} scale={} mode={} radius={:.0} feather={:.0} blur={:.0} band={:.0} enabled={} mask_center={} mask_corner={}",
+                "[mac-blur] local_mouse={:.0},{:.0} screen={}x{} scale={} mode={} radius={:.0} feather={:.0} blur={:.0} band={}x{}+{},{} enabled={} mask_center={} mask_corner={}",
                 smoothed_mouse[0],
                 smoothed_mouse[1],
                 size.width,
@@ -205,7 +205,10 @@ fn mask_update_loop(
                 effective_params.radius,
                 effective_params.feather,
                 effective_params.blur_px,
-                effective_params.band_half_px,
+                effective_params.band_half_w,
+                effective_params.band_half_h,
+                effective_params.band_offset_x,
+                effective_params.band_offset_y,
                 effective_params.enabled,
                 center,
                 corner
@@ -254,11 +257,6 @@ fn mask_update_loop(
 }
 
 /// 与 Windows shader 相同的距离模型：黑色（0）= 清晰区，白色（255）= 模糊。
-/// mask 绘制中心的额外偏移（top-left 原点，屏幕宽高比例）。capInsets 拉伸
-/// 修复映射后应保持 0；仅在实际仍存在固定偏移时用于校准。
-const MASK_OFFSET_X: f32 = 0.0;
-const MASK_OFFSET_Y: f32 = 0.0;
-
 fn render_mask_pixels(
     params: &GpuRendererParams,
     mouse: [f32; 2],
@@ -272,19 +270,20 @@ fn render_mask_pixels(
     }
 
     let is_spotlight = params.mode == 0;
-    let edge = if is_spotlight {
-        params.radius
-    } else {
-        params.band_half_px
-    };
+    // 横带用矩形 SDF（矩形内距离为 0），羽化从 0 开始；气泡从 radius 开始。
+    let edge = if is_spotlight { params.radius } else { 0.0 };
     let feather = params.feather.max(1.0);
     let scale_x = params.spot_scale_x.max(0.1);
     let scale_y = params.spot_scale_y.max(0.1);
-
-    let center = [
-        mouse[0] + screen_width * MASK_OFFSET_X,
-        mouse[1] + screen_height * MASK_OFFSET_Y,
-    ];
+    // 横带中心 = 鼠标 + 用户偏移；气泡跟随鼠标。
+    let center = if is_spotlight {
+        mouse
+    } else {
+        [
+            mouse[0] + params.band_offset_x,
+            mouse[1] + params.band_offset_y,
+        ]
+    };
 
     for y in 0..MASK_HEIGHT {
         let py = (y as f32 + 0.5) / MASK_HEIGHT as f32 * screen_height;
@@ -295,7 +294,12 @@ fn render_mask_pixels(
                 let dy = (py - center[1]) / scale_y;
                 (dx * dx + dy * dy).sqrt()
             } else {
-                (py - center[1]).abs()
+                // 矩形有符号距离（等距线天然圆角）。
+                let dx = (px - center[0]).abs() - params.band_half_w;
+                let dy = (py - center[1]).abs() - params.band_half_h;
+                let cx = dx.max(0.0);
+                let cy = dy.max(0.0);
+                (cx * cx + cy * cy).sqrt()
             };
             let t = ((dist - edge) / feather).clamp(0.0, 1.0);
             let mask = t * t * (3.0 - 2.0 * t);

@@ -1,13 +1,17 @@
 import {
-  BookOpen,
-  Code2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Crosshair,
   Eye,
   Gauge,
   Globe2,
   MousePointer2,
   Power,
+  RectangleHorizontal,
   RefreshCw,
+  RotateCcw,
   Settings2,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -16,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import './App.css'
 
-type FocusMode = 'spotlight' | 'reading' | 'code'
+type FocusMode = 'spotlight' | 'band'
 type Language = 'zh-CN' | 'en-US' | 'ja-JP' | 'ko-KR' | 'de-DE' | 'fr-FR' | 'es-ES'
 
 type FocusSettings = {
@@ -28,8 +32,10 @@ type FocusSettings = {
   blur: number
   opacity: number
   smoothing: number
-  readingHeight: number
-  codeHeight: number
+  bandHeight: number
+  bandWidth: number
+  offsetX: number
+  offsetY: number
   spotlightScaleX: number
   spotlightScaleY: number
   closeToTray: boolean
@@ -87,8 +93,10 @@ const defaultSettings: FocusSettings = {
   blur: 10,
   opacity: 0.3,
   smoothing: 0.14,
-  readingHeight: 260,
-  codeHeight: 110,
+  bandHeight: 400,
+  bandWidth: 1920,
+  offsetX: 0,
+  offsetY: 0,
   spotlightScaleX: 1,
   spotlightScaleY: 1,
   closeToTray: true,
@@ -143,10 +151,8 @@ const copy = {
     settings: '设置',
     spotlight: '气泡',
     spotlightDescription: '以鼠标为中心保留椭圆清晰区域，适合浏览和整理资料。',
-    reading: '阅读',
-    readingDescription: '把清晰区域拉成横向长条，减少段落上下方的干扰。',
-    code: '代码',
-    codeDescription: '保留更窄的行级区域，适合跟读代码、日志和表格。',
+    band: '横带',
+    bandDescription: '宽度和高度都可调的清晰矩形区域，中心可相对鼠标偏移，适合阅读行、代码行和字幕。',
     radius: '清晰半径',
     feather: '边缘羽化',
     spotlightScaleX: '横向拉伸',
@@ -154,8 +160,10 @@ const copy = {
     blur: 'GPU 模糊',
     opacity: '外围暗度',
     smoothing: '跟随平滑',
-    readingHeight: '阅读带高度',
-    codeHeight: '代码行高度',
+    bandHeight: '横带高度',
+    bandWidth: '横带宽度',
+    offset: '位置偏移',
+    resetOffset: '回中',
         renderer: '渲染器',
     nativeBlur: '原生模糊',
     platform: '平台',
@@ -212,10 +220,8 @@ const copy = {
     settings: 'Settings',
     spotlight: 'Bubble',
     spotlightDescription: 'Keeps a clear elliptical area around the pointer for browsing and sorting.',
-    reading: 'Reading',
-    readingDescription: 'Uses a horizontal clear band to reduce distractions above and below text.',
-    code: 'Code',
-    codeDescription: 'Keeps a tighter line-level band for code, logs, tables, and terminals.',
+    band: 'Band',
+    bandDescription: 'A clear rectangular area with adjustable width and height; its center can offset from the pointer for reading lines, code, or subtitles.',
     radius: 'Clear radius',
     feather: 'Edge feather',
     spotlightScaleX: 'Horizontal stretch',
@@ -223,8 +229,10 @@ const copy = {
     blur: 'GPU blur',
     opacity: 'Outer dim',
     smoothing: 'Follow smoothing',
-    readingHeight: 'Reading band',
-    codeHeight: 'Code band',
+    bandHeight: 'Band height',
+    bandWidth: 'Band width',
+    offset: 'Offset',
+    resetOffset: 'Recenter',
         renderer: 'Renderer',
     nativeBlur: 'Native blur',
     platform: 'Platform',
@@ -281,10 +289,8 @@ const copy = {
     settings: '設定',
     spotlight: 'バブル',
     spotlightDescription: 'マウスを中心とした楕円形のクリア領域を保持し、閲覧や資料整理に適しています。',
-    reading: 'リーディング',
-    readingDescription: 'クリア領域を横長の帯にして、段落の上下の干渉を減らします。',
-    code: 'コード',
-    codeDescription: 'より狭い行レベルの領域を保持し、コード・ログ・表の追読みに適しています。',
+    band: 'バンド',
+    bandDescription: '幅と高さを調整できるクリアな矩形領域。中心はマウスからオフセット可能で、読み行・コード行・字幕に適しています。',
     radius: 'クリア半径',
     feather: 'エッジのフェザー',
     spotlightScaleX: '横方向のストレッチ',
@@ -292,8 +298,10 @@ const copy = {
     blur: 'GPU ぼかし',
     opacity: '周辺の暗さ',
     smoothing: '追従の滑らかさ',
-    readingHeight: 'リーディング帯の高さ',
-    codeHeight: 'コード行の高さ',
+    bandHeight: 'バンド高さ',
+    bandWidth: 'バンド幅',
+    offset: 'オフセット',
+    resetOffset: '中心へ',
         renderer: 'レンダラー',
     nativeBlur: 'ネイティブぼかし',
     platform: 'プラットフォーム',
@@ -350,10 +358,8 @@ const copy = {
     settings: '설정',
     spotlight: '버블',
     spotlightDescription: '마우스를 중심으로 타원형 선명 영역을 유지하여 탐색과 자료 정리에 적합합니다.',
-    reading: '리딩',
-    readingDescription: '선명 영역을 가로로 길게 늘여 단락 위아래의 방해를 줄입니다.',
-    code: '코드',
-    codeDescription: '더 좁은 행 단위 영역을 유지하여 코드, 로그, 표를 따라 읽기에 적합합니다.',
+    band: '밴드',
+    bandDescription: '너비와 높이를 조절할 수 있는 선명한 사각 영역입니다. 중심을 마우스에서 오프셋할 수 있어 읽기 행, 코드 행, 자막에 적합합니다.',
     radius: '선명 반경',
     feather: '가장자리 페더',
     spotlightScaleX: '가로 늘리기',
@@ -361,8 +367,10 @@ const copy = {
     blur: 'GPU 블러',
     opacity: '주변 어둡기',
     smoothing: '부드러운 따라가기',
-    readingHeight: '리딩 밴드 높이',
-    codeHeight: '코드 행 높이',
+    bandHeight: '밴드 높이',
+    bandWidth: '밴드 너비',
+    offset: '오프셋',
+    resetOffset: '중앙으로',
         renderer: '렌더러',
     nativeBlur: '네이티브 블러',
     platform: '플랫폼',
@@ -419,10 +427,8 @@ const copy = {
     settings: 'Einstellungen',
     spotlight: 'Blase',
     spotlightDescription: 'Hält einen klaren Ellipsenbereich um den Zeiger – ideal zum Stöbern und Sortieren.',
-    reading: 'Lesen',
-    readingDescription: 'Zieht den klaren Bereich in ein horizontales Band und reduziert Ablenkungen über und unter dem Text.',
-    code: 'Code',
-    codeDescription: 'Hält ein schmales zeilenweises Band für Code, Logs und Tabellen.',
+    band: 'Bande',
+    bandDescription: 'Ein klarer rechteckiger Bereich mit einstellbarer Breite und Höhe; das Zentrum lässt sich vom Zeiger verschieben – ideal für Lesezeilen, Code und Untertitel.',
     radius: 'Klarer Radius',
     feather: 'Kantenverlauf',
     spotlightScaleX: 'Horizontal strecken',
@@ -430,8 +436,10 @@ const copy = {
     blur: 'GPU-Blur',
     opacity: 'Abdunklung',
     smoothing: 'Folgeglättung',
-    readingHeight: 'Leseband',
-    codeHeight: 'Codezeile',
+    bandHeight: 'Bandhöhe',
+    bandWidth: 'Bandbreite',
+    offset: 'Versatz',
+    resetOffset: 'Zentrieren',
     renderer: 'Renderer',
     nativeBlur: 'Natives Blur',
     platform: 'Plattform',
@@ -488,10 +496,8 @@ const copy = {
     settings: 'Réglages',
     spotlight: 'Bulle',
     spotlightDescription: 'Garde une zone claire elliptique autour du curseur, idéale pour parcourir et trier.',
-    reading: 'Lecture',
-    readingDescription: 'Étire la zone claire en bandeau horizontal pour réduire les distractions autour du texte.',
-    code: 'Code',
-    codeDescription: 'Garde un bandeau étroit au niveau de la ligne pour le code, les logs et les tableaux.',
+    band: 'Bande',
+    bandDescription: 'Une zone claire rectangulaire de largeur et hauteur réglables ; son centre peut être décalé par rapport au curseur — idéal pour lignes de lecture, code et sous-titres.',
     radius: 'Rayon net',
     feather: 'Adoucissement',
     spotlightScaleX: 'Étirement horizontal',
@@ -499,8 +505,10 @@ const copy = {
     blur: 'Flou GPU',
     opacity: 'Assombrissement',
     smoothing: 'Suivi lissé',
-    readingHeight: 'Bandeau de lecture',
-    codeHeight: 'Ligne de code',
+    bandHeight: 'Hauteur de bande',
+    bandWidth: 'Largeur de bande',
+    offset: 'Décalage',
+    resetOffset: 'Recentrer',
         renderer: 'Rendu',
     nativeBlur: 'Flou natif',
     platform: 'Plateforme',
@@ -557,10 +565,8 @@ const copy = {
     settings: 'Ajustes',
     spotlight: 'Burbuja',
     spotlightDescription: 'Mantiene una zona clara elíptica alrededor del puntero, ideal para explorar y organizar.',
-    reading: 'Lectura',
-    readingDescription: 'Convierte la zona clara en una banda horizontal para reducir distracciones arriba y abajo del texto.',
-    code: 'Código',
-    codeDescription: 'Mantiene una banda estrecha a nivel de línea para código, registros y tablas.',
+    band: 'Banda',
+    bandDescription: 'Un área clara rectangular con ancho y alto ajustables; su centro puede desplazarse respecto al puntero, ideal para líneas de lectura, código y subtítulos.',
     radius: 'Radio claro',
     feather: 'Suavizado de borde',
     spotlightScaleX: 'Estiramiento horizontal',
@@ -568,8 +574,10 @@ const copy = {
     blur: 'Desenfoque GPU',
     opacity: 'Oscurecimiento',
     smoothing: 'Suavidad de seguimiento',
-    readingHeight: 'Banda de lectura',
-    codeHeight: 'Línea de código',
+    bandHeight: 'Alto de banda',
+    bandWidth: 'Ancho de banda',
+    offset: 'Desplazamiento',
+    resetOffset: 'Centrar',
         renderer: 'Renderizador',
     nativeBlur: 'Desenfoque nativo',
     platform: 'Plataforma',
@@ -610,7 +618,23 @@ const copy = {
 function loadSettings(): FocusSettings {
   try {
     const saved = localStorage.getItem(storageKey)
-    return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings
+    if (!saved) return defaultSettings
+    const parsed = JSON.parse(saved) as Record<string, unknown>
+    // 阅读/代码模式已合并为 band；带高从旧半高值迁移为全高。
+    if (parsed.mode === 'reading' || parsed.mode === 'code') {
+      parsed.mode = 'band'
+      if (typeof parsed.bandHeight !== 'number') {
+        const half = (parsed.mode === 'band' && typeof parsed.readingHeight === 'number')
+          ? parsed.readingHeight
+          : typeof parsed.codeHeight === 'number'
+            ? parsed.codeHeight
+            : 200
+        parsed.bandHeight = half * 2
+      }
+      delete parsed.readingHeight
+      delete parsed.codeHeight
+    }
+    return { ...defaultSettings, ...parsed }
   } catch {
     return defaultSettings
   }
@@ -656,8 +680,10 @@ function ControlPanel() {
         feather: settings.feather,
         dim: settings.opacity,
         blur: settings.blur,
-        bandHeight:
-          settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight,
+        bandHeight: settings.bandHeight,
+        bandWidth: settings.bandWidth,
+        offsetX: settings.offsetX,
+        offsetY: settings.offsetY,
         spotlightScaleX: settings.spotlightScaleX,
         spotlightScaleY: settings.spotlightScaleY,
         smoothing: settings.smoothing,
@@ -850,6 +876,13 @@ function ControlPanel() {
     setSettings((current) => ({ ...current, ...preset }))
   }
 
+  const nudgeOffset = (key: 'offsetX' | 'offsetY', delta: number) => {
+    setSettings((current) => ({
+      ...current,
+      [key]: Math.max(-600, Math.min(600, current[key] + delta)),
+    }))
+  }
+
   const modeDetails = useMemo(
     () => ({
       spotlight: {
@@ -857,15 +890,10 @@ function ControlPanel() {
         title: t.spotlight,
         description: t.spotlightDescription,
       },
-      reading: {
-        icon: BookOpen,
-        title: t.reading,
-        description: t.readingDescription,
-      },
-      code: {
-        icon: Code2,
-        title: t.code,
-        description: t.codeDescription,
+      band: {
+        icon: RectangleHorizontal,
+        title: t.band,
+        description: t.bandDescription,
       },
     }),
     [t],
@@ -1035,30 +1063,70 @@ function ControlPanel() {
                 </>
               )}
 
-              {settings.mode === 'reading' && (
-                <RangeControl
-                  icon={<BookOpen size={17} />}
-                  label={t.readingHeight}
-                  min={40}
-                  max={screenLimits.heightMax}
-                  step={10}
-                  value={settings.readingHeight}
-                  suffix="px"
-                  onChange={(value) => update('readingHeight', value)}
-                />
-              )}
-
-              {settings.mode === 'code' && (
-                <RangeControl
-                  icon={<Code2 size={17} />}
-                  label={t.codeHeight}
-                  min={24}
-                  max={screenLimits.heightMax}
-                  step={4}
-                  value={settings.codeHeight}
-                  suffix="px"
-                  onChange={(value) => update('codeHeight', value)}
-                />
+              {settings.mode === 'band' && (
+                <>
+                  <RangeControl
+                    icon={<RectangleHorizontal size={17} />}
+                    label={t.bandHeight}
+                    min={60}
+                    max={screenLimits.heightMax}
+                    step={10}
+                    value={settings.bandHeight}
+                    suffix="px"
+                    onChange={(value) => update('bandHeight', value)}
+                  />
+                  <RangeControl
+                    icon={<RectangleHorizontal size={17} />}
+                    label={t.bandWidth}
+                    min={200}
+                    max={screenLimits.widthMax}
+                    step={20}
+                    value={settings.bandWidth}
+                    suffix="px"
+                    onChange={(value) => update('bandWidth', value)}
+                  />
+                  <div className="offsetRemote">
+                    <span className="rangeLabel">
+                      <MousePointer2 size={17} />
+                      {t.offset}
+                    </span>
+                    <div className="remotePad">
+                      <span />
+                      <button type="button" onClick={() => nudgeOffset('offsetY', -20)}>
+                        <ChevronUp size={15} />
+                      </button>
+                      <span />
+                      <button type="button" onClick={() => nudgeOffset('offsetX', -20)}>
+                        <ChevronLeft size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="remoteReset"
+                        title={t.resetOffset}
+                        onClick={() => {
+                          update('offsetX', 0)
+                          update('offsetY', 0)
+                        }}
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                      <button type="button" onClick={() => nudgeOffset('offsetX', 20)}>
+                        <ChevronRight size={15} />
+                      </button>
+                      <span />
+                      <button type="button" onClick={() => nudgeOffset('offsetY', 20)}>
+                        <ChevronDown size={15} />
+                      </button>
+                      <span />
+                    </div>
+                    <output>
+                      {settings.offsetX >= 0 ? '+' : ''}
+                      {Math.round(settings.offsetX)},{' '}
+                      {settings.offsetY >= 0 ? '+' : ''}
+                      {Math.round(settings.offsetY)}
+                    </output>
+                  </div>
+                </>
               )}
 
               <RangeControl
@@ -1320,6 +1388,7 @@ function getScreenLimits() {
   return {
     radiusMax: Math.max(800, Math.ceil(Math.hypot(width, height))),
     heightMax: Math.max(480, height),
+    widthMax: Math.max(1600, width * 2),
   }
 }
 
@@ -1389,8 +1458,10 @@ function FocusPreview({ settings }: { settings: FocusSettings }) {
             '--preview-ry': `${((settings.radius + settings.feather) / 5) * settings.spotlightScaleY}px`,
             '--preview-inner': `${(settings.radius / Math.max(1, settings.radius + settings.feather)) * 100}%`,
             '--preview-blur': `${settings.blur}px`,
-            '--preview-reading': `${settings.readingHeight / 4}px`,
-            '--preview-code': `${settings.codeHeight / 2}px`,
+            '--band-w': `${settings.bandWidth / 5}px`,
+            '--band-h': `${settings.bandHeight / 3}px`,
+            '--band-off-x': `${settings.offsetX / 5}px`,
+            '--band-off-y': `${settings.offsetY / 5}px`,
           } as CSSProperties
         }
       />
@@ -1550,16 +1621,23 @@ function FocusOverlay() {
           context.restore()
         }
 
-        if (settings.mode === 'reading' || settings.mode === 'code') {
-          const bandBase = settings.mode === 'reading' ? settings.readingHeight : settings.codeHeight
-          const bandHeight = bandBase * (1 + 0.25 * ease)
-          const gradient = context.createLinearGradient(0, current.y - bandHeight, 0, current.y + bandHeight)
-          gradient.addColorStop(0, 'rgba(0, 0, 0, 0)')
-          gradient.addColorStop(0.28, 'rgba(0, 0, 0, 1)')
-          gradient.addColorStop(0.72, 'rgba(0, 0, 0, 1)')
-          gradient.addColorStop(1, 'rgba(0, 0, 0, 0)')
-          context.fillStyle = gradient
-          context.fillRect(0, current.y - bandHeight, width, bandHeight * 2)
+        if (settings.mode === 'band') {
+          const comfortScale = 1 + 0.25 * ease
+          const bandWidth = settings.bandWidth * comfortScale
+          const bandHeight = settings.bandHeight * comfortScale
+          const cx = current.x + settings.offsetX
+          const cy = current.y + settings.offsetY
+          context.save()
+          // 圆角矩形 + 滤镜模糊近似羽化边缘
+          context.filter = `blur(${Math.max(1, effectiveFeather * 0.4)}px)`
+          context.beginPath()
+          if (typeof context.roundRect === 'function') {
+            context.roundRect(cx - bandWidth / 2, cy - bandHeight / 2, bandWidth, bandHeight, bandHeight / 2)
+          } else {
+            context.rect(cx - bandWidth / 2, cy - bandHeight / 2, bandWidth, bandHeight)
+          }
+          context.fill()
+          context.restore()
         }
 
         context.restore()

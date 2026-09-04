@@ -36,13 +36,19 @@ pub struct OverlayRenderSettings {
 #[derive(Clone, Copy, Debug)]
 pub struct GpuRendererParams {
     pub enabled: bool,
-    /// 0 = spotlight, 1 = reading, 2 = code
+    /// 0 = spotlight, 1 = band（阅读/代码已合并）
     pub mode: i32,
     pub radius: f32,
     pub feather: f32,
     pub dim: f32,
     pub blur_px: f32,
-    pub band_half_px: f32,
+    /// 横带半高（物理像素）。
+    pub band_half_h: f32,
+    /// 横带半宽（物理像素）；等于半屏宽即整幅横带。
+    pub band_half_w: f32,
+    /// 横带中心相对鼠标的偏移（物理像素，top-left 原点）。
+    pub band_offset_x: f32,
+    pub band_offset_y: f32,
     /// 气泡椭圆横向/纵向拉伸系数（无量纲，1.0 = 正圆）。
     pub spot_scale_x: f32,
     pub spot_scale_y: f32,
@@ -60,7 +66,10 @@ impl Default for GpuRendererParams {
             feather: 180.0,
             dim: 0.30,
             blur_px: 10.0,
-            band_half_px: 280.0,
+            band_half_h: 130.0,
+            band_half_w: 960.0,
+            band_offset_x: 0.0,
+            band_offset_y: 0.0,
             spot_scale_x: 1.0,
             spot_scale_y: 1.0,
             tracking_alpha: 0.14,
@@ -160,7 +169,8 @@ pub fn update_comfort(
     // 速度自适应只作用于几何（轻微、平缓）：清晰区最多扩 25%，羽化最多 +140px。
     // 暗度与模糊保持恒定。
     effective.radius = raw_params.radius * (1.0 + 0.25 * ease);
-    effective.band_half_px = raw_params.band_half_px * (1.0 + 0.25 * ease);
+    effective.band_half_h = raw_params.band_half_h * (1.0 + 0.25 * ease);
+    effective.band_half_w = raw_params.band_half_w * (1.0 + 0.25 * ease);
     effective.feather = raw_params.feather + 140.0 * ease;
 
     (comfort.smoothed_mouse, effective)
