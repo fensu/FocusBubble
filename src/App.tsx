@@ -1744,6 +1744,9 @@ function FocusOverlay() {
           const cx = current.x + settings.offsetX
           const cy = current.y + settings.offsetY
           context.save()
+          // destination-out 的挖洞力度取决于绘制内容 alpha；必须显式设为
+          // 全不透明，否则复用暗化层的半透明色导致带内残留暗度（偏暗 bug）。
+          context.fillStyle = 'rgba(0, 0, 0, 1)'
           // 圆角矩形 + 滤镜模糊近似羽化边缘
           context.filter = `blur(${Math.max(1, effectiveFeather * 0.4)}px)`
           context.beginPath()
