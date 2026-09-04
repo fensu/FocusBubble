@@ -1,14 +1,23 @@
-//! 极小 PNG 编码器（灰度 8-bit，deflate stored 块）。
-//! macOS maskImage 更新用；跨平台无 cfg，便于在任意平台跑单元测试校验字节。
+//! 极小 PNG 编码器（RGBA 8-bit，deflate stored 块），macOS maskImage 用。
+//!
+//! NSVisualEffectView.maskImage 用图像的 **alpha 通道** 作掩码
+//! （头文件注释：The alpha channel of this image is used as a mask），
+//! 因此 RGB 固定置白、A 携带 mask 值：0 = 无效果（清晰区），255 = 模糊。
+//! 跨平台无 cfg，便于在任意平台跑单元测试校验字节。
 
-pub fn encode_grayscale_png(width: usize, height: usize, pixels: &[u8]) -> Vec<u8> {
-    debug_assert_eq!(pixels.len(), width * height);
+pub fn encode_mask_png(width: usize, height: usize, mask: &[u8]) -> Vec<u8> {
+    debug_assert_eq!(mask.len(), width * height);
 
-    let mut raw = Vec::with_capacity((width + 1) * height);
+    let mut raw = Vec::with_capacity((width * 4 + 1) * height);
     for row in 0..height {
         raw.push(0u8); // filter: none
         let start = row * width;
-        raw.extend_from_slice(&pixels[start..start + width]);
+        for &value in &mask[start..start + width] {
+            raw.push(255); // R
+            raw.push(255); // G
+            raw.push(255); // B
+            raw.push(value); // A = mask
+        }
     }
 
     let mut idat = vec![0x78, 0x01]; // zlib: deflate stored, 最小开销
@@ -27,7 +36,7 @@ fn ihdr_payload(width: usize, height: usize) -> Vec<u8> {
     payload.extend_from_slice(&(width as u32).to_be_bytes());
     payload.extend_from_slice(&(height as u32).to_be_bytes());
     payload.push(8); // bit depth
-    payload.push(0); // color type: grayscale
+    payload.push(6); // color type: RGBA
     payload.push(0); // compression: deflate
     payload.push(0); // filter: adaptive
     payload.push(0); // interlace: none
@@ -90,17 +99,7 @@ fn adler32(data: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn png_size_grows_with_payload() {
-        let black = encode_grayscale_png(4, 4, &vec![0u8; 16]);
-        let mixed = encode_grayscale_png(4, 4, &(0..16).collect::<Vec<u8>>());
-        assert_eq!(black.len(), mixed.len());
-        assert!(black.len() > 8 + 12 + 13 + 12 + 12);
-    }
-
-    #[test]
-    fn writes_test_png_for_external_validation() {
-        // 生成一张带清晰圆的真实 mask，供 Node zlib 解码校验（见 CI 前本地检查）。
+    fn sample_mask() -> (usize, usize, Vec<u8>) {
         let (w, h) = (160usize, 90usize);
         let mut pixels = vec![255u8; w * h];
         for y in 0..h {
@@ -112,12 +111,29 @@ mod tests {
                 }
             }
         }
-        let png = encode_grayscale_png(w, h, &pixels);
-        if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-            let path = std::path::Path::new(&dir).join("mask_test.png");
-            let _ = std::fs::write(path, &png);
-        } else {
-            let _ = std::fs::write("mask_test.png", &png);
-        }
+        (w, h, pixels)
+    }
+
+    #[test]
+    fn mask_png_structure() {
+        let (w, h, pixels) = sample_mask();
+        let png = encode_mask_png(w, h, &pixels);
+        let be32 = |i: usize| {
+            u32::from_be_bytes([png[i], png[i + 1], png[i + 2], png[i + 3]])
+        };
+        // 签名(8) + 长度(4) + 类型(4) 后是 IHDR payload：
+        // w(4) h(4) depth(1) ctype(1) → color type 在索引 25。
+        assert_eq!(be32(16), w as u32);
+        assert_eq!(be32(20), h as u32);
+        assert_eq!(png[24], 8, "bit depth must be 8");
+        assert_eq!(png[25], 6, "color type must be RGBA");
+    }
+
+    #[test]
+    fn writes_test_png_for_external_validation() {
+        let (w, h, pixels) = sample_mask();
+        let png = encode_mask_png(w, h, &pixels);
+        let path = std::path::Path::new("mask_test.png");
+        let _ = std::fs::write(path, &png);
     }
 }

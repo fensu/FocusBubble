@@ -21,7 +21,7 @@ use objc2_app_kit::{NSImage, NSView, NSVisualEffectView};
 use objc2_foundation::{MainThreadMarker, NSData};
 use tauri::Manager;
 
-use super::mask_png::encode_grayscale_png;
+use super::mask_png::encode_mask_png;
 use crate::renderer::GpuRendererParams;
 
 /// window-vibrancy 给 effect view 打的 tag（其源码 NS_VIEW_TAG_BLUR_VIEW）。
@@ -132,7 +132,7 @@ fn mask_update_loop(
         smoothed[1] += (local_y as f32 - smoothed[1]) * alpha;
 
         let pixels = render_mask_pixels(&params, smoothed, size.width as f32, size.height as f32);
-        let png = encode_grayscale_png(MASK_WIDTH, MASK_HEIGHT, &pixels);
+        let png = encode_mask_png(MASK_WIDTH, MASK_HEIGHT, &pixels);
 
         let send = handle.clone();
         let result = send.run_on_main_thread(move || unsafe {
