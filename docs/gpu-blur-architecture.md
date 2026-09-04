@@ -142,6 +142,11 @@ transparent NSWindow
 
 `NSVisualEffectView` 的 `behindWindow` 模式由系统 compositor 使用窗口后方内容做混合和模糊。相比持续截屏，这条路径更符合 macOS 平台能力，值得优先实验。
 
+**已实现（v0.3.0，`platform/macos.rs`）**：`window-vibrancy` 在 overlay 挂 UnderWindowBackground effect view；更新线程 30fps 用与 Windows shader 相同的距离模型渲染 160x90 灰度 mask（黑=清晰区，白=模糊），经 `run_on_main_thread` 生成 NSImage 并 `setMaskImage`。mask 经手写 PNG 编码器（`platform/mask_png.rs`，无图像库依赖，字节已用 Node zlib 外部校验）。变暗仍由 Canvas overlay 负责。blur 滑块在 macOS 上为开关语义（>=1 启用系统模糊）；模糊强度由 material 决定。待验证项：
+
+- `NSVisualEffectView` 的 `maskImage` 高频更新性能与视觉平滑度。
+- 透明窗口 + vibrancy + WebView 三层叠加在多显示器/不同 appearance 下的表现。
+
 macOS prototype 要验证：
 
 - 透明全屏 `NSWindow` + 鼠标穿透是否稳定。

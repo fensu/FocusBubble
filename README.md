@@ -51,15 +51,16 @@ Windows Graphics Capture 捕获
 
 - [x] 三种聚焦模式（GPU + Canvas 双渲染路径）
 - [x] Windows GPU 真模糊管线（WGC → D3D11 → DirectComposition）
+- [x] macOS 原生模糊（NSVisualEffectView behindWindow + 跟随鼠标的 maskImage，无需屏幕录制权限）
 - [x] 视觉舒适度约束层（速度自适应 + 平滑跟随）
 - [x] 气泡椭圆双向拉伸
 - [x] 系统托盘 + 关闭行为配置
+- [x] 应用内手动检查更新 + 后台下载安装
 - [x] 多语言界面
 - [x] 运行状态面板（FPS、生效参数、错误回显）
 
 ## 计划中
 
-- [ ] macOS 原生模糊路线（NSVisualEffectView behindWindow）
 - [ ] Linux（Wayland 下仅 Canvas 雾化，X11 实验性 GPU 捕获）
 - [ ] 多显示器支持（跟随鼠标所在显示器）
 - [ ] 全局快捷键

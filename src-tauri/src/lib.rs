@@ -590,6 +590,12 @@ pub fn run() {
                 eprintln!("failed to build tray icon: {error}");
             }
 
+            #[cfg(target_os = "macos")]
+            platform::macos::start_mac_blur(
+                app.handle(),
+                Arc::clone(&app.state::<AppState>().gpu_renderer_params),
+            );
+
             #[cfg(target_os = "windows")]
             {
                 match platform::windows::probe_d3d11_device() {
