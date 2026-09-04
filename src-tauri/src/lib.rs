@@ -241,6 +241,44 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
     }
 }
 
+/// 启动（或复用）GPU 渲染器，成功后隐藏 overlay 的 WebView——
+/// Windows 上 Canvas 层不再参与渲染，也彻底规避 Win10 透明 WebView
+/// 的顶部残留条 artifact（该条只在 WebView 渲染层存在）。
+#[cfg(target_os = "windows")]
+fn ensure_gpu_renderer(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut gpu_renderer = state
+        .gpu_renderer
+        .lock()
+        .map_err(|_| "GPU renderer state lock poisoned".to_string())?;
+
+    if gpu_renderer
+        .as_ref()
+        .map(|renderer| renderer.is_alive())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let overlay = app
+        .get_webview_window("overlay")
+        .ok_or_else(|| "overlay window not found".to_string())?;
+
+    let renderer = platform::windows::GpuRenderer::start(
+        &overlay,
+        Arc::clone(&state.gpu_renderer_params),
+    )?;
+    *gpu_renderer = Some(renderer);
+    drop(gpu_renderer);
+
+    // GPU 模式隐藏 Canvas 层（get_webview 需 unstable feature，经
+    // WebviewWindow 的 AsRef<Webview> 访问）。
+    use tauri::Manager as _;
+    let _ = overlay.as_ref().hide();
+
+    Ok(())
+}
+
 #[tauri::command]
 fn gpu_renderer_start(
     app: tauri::AppHandle,
@@ -248,29 +286,8 @@ fn gpu_renderer_start(
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let overlay = app
-            .get_webview_window("overlay")
-            .ok_or_else(|| "overlay window not found".to_string())?;
-
-        let mut gpu_renderer = state
-            .gpu_renderer
-            .lock()
-            .map_err(|_| "GPU renderer state lock poisoned".to_string())?;
-
-        if gpu_renderer
-            .as_ref()
-            .map(|renderer| renderer.is_alive())
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
-
-        let renderer = platform::windows::GpuRenderer::start(
-            &overlay,
-            Arc::clone(&state.gpu_renderer_params),
-        )?;
-        *gpu_renderer = Some(renderer);
-        Ok(())
+        let _ = state;
+        ensure_gpu_renderer(&app)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -281,7 +298,7 @@ fn gpu_renderer_start(
 }
 
 #[tauri::command]
-fn gpu_renderer_stop(state: State<'_, AppState>) -> Result<(), String> {
+fn gpu_renderer_stop(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let mut gpu_renderer = state
@@ -292,12 +309,18 @@ fn gpu_renderer_stop(state: State<'_, AppState>) -> Result<(), String> {
         if let Some(mut renderer) = gpu_renderer.take() {
             renderer.stop();
         }
+        drop(gpu_renderer);
+
+        // 停止直通后恢复 Canvas 渲染层。
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            let _ = overlay.as_ref().show();
+        }
         Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = state;
+        let _ = (app, state);
         Ok(())
     }
 }
@@ -775,6 +798,20 @@ pub fn run() {
                     }
                     Err(error) => {
                         eprintln!("{error}");
+                    }
+                }
+
+                // GPU 探测全部通过则自动启动直通：画面由 DComp 全程承载，
+                // WebView 隐藏（规避 Win10 透明 WebView 的顶部残留条），
+                // 用户不再需要手动点「启动直通」。
+                let state = app.state::<AppState>();
+                if state.d3d11_device_available.load(Ordering::Relaxed)
+                    && state
+                        .windows_graphics_capture_supported
+                        .load(Ordering::Relaxed)
+                {
+                    if let Err(error) = ensure_gpu_renderer(app.handle()) {
+                        eprintln!("GPU renderer autostart failed (canvas fallback): {error}");
                     }
                 }
             }
