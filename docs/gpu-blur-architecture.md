@@ -38,40 +38,49 @@ without CPU copies and without capturing Focus Bubble itself?
 
 只要稳定拿到 overlay 背后的桌面像素，blur shader 本身是相对简单的部分。
 
-## 2. Windows 高级 pipeline
-
-目标 pipeline：
+## 2. Windows 实现（v0.1.x 现行架构）
 
 ```text
-Desktop
-  -> Windows Graphics Capture
-  -> GPU capture texture
-  -> Direct3D 11/12
-  -> downsample 1/2 or 1/4
-  -> horizontal blur shader
-  -> vertical blur shader
-  -> upsample
-  -> dim shader
-  -> focus mask shader
-  -> DirectComposition / swapchain
-  -> transparent fullscreen overlay
+覆盖层窗口（Tauri WebviewWindow）
+  ├─ 无边框 + 原生全屏 + 置顶 + 鼠标穿透 + 空标题 + 不可 resize
+  ├─ transparent(true) + background_color(0,0,0,0)
+  ├─ WDA_EXCLUDEFROMCAPTURE（自身不出现在捕获里，防镜厅递归）
+  └─ 直通运行期间 WebView 隐藏（画面由 DComp 独占，规避 Win10 透明
+     WebView 的顶部残留条 artifact）
+
+GPU 渲染线程（platform/windows.rs，全部对象线程内创建/销毁）
+  ├─ D3D11 hardware device（BGRA support）
+  ├─ WGC：CreateForMonitor capture item → CreateFreeThreaded frame pool(2)
+  │   → session（SetIsBorderRequired(false) 尽力关黄框；
+  │      光标捕获默认开启——Win10 关闭存在光标混入闪烁缺陷，
+  │      FOCUS_BUBBLE_DISABLE_CURSOR_CAPTURE=1 可强制关）
+  ├─ 合成目标：DComp device + target(hwnd, topmost) + visual +
+  │   composition swapchain（premultiplied alpha, flip sequential）
+  └─ 渲染循环（~60fps）：
+      共享参数 + GetCursorPos(局部物理坐标)
+      → renderer::update_comfort（dt 归一化双重平滑）
+      → TryGetNextFrame → CopyResource 到自有纹理（与帧池生命周期解耦）
+      → 触发条件（新帧 / 参数变化 / 鼠标移动[仅光标捕获关闭时]）
+      → Present(0) 即时提交 + 8ms 自限频
+
+着色器管线（启动时 D3DCompile 编译内嵌 HLSL）
+  VS：fullscreen triangle（SV_VertexID）
+  PSBlurH：capture → 1/4 降采样 + 横向 9-tap Gaussian
+  PSBlurV：quarterA → quarterB 纵向
+  PSComposite：光圈 mask（气泡椭圆 / 横带矩形 SDF + 偏移）
+      + dim + blur 混合 + 光标透明孔（见下）→ premultiplied 输出
+  cbuffer 5 寄存器（80 字节），字段与 Rust #[repr(C)] 结构逐字节对齐
+
+光标透明孔（PSComposite）
+  鼠标周围 radius 56px（+速度扩张 48px）alpha=0 羽化孔，
+  孔内 DWM 直接透出 overlay 底下的【真实桌面】——实时零延迟真光标，
+  捕获画面里的旧光标被完全盖住（消除拖影）。
+
+诊断：状态面板「直通参数/FPS」+ overlay Canvas 帧率上报。
 ```
 
-Windows Graphics Capture 可以通过 `Direct3D11CaptureFramePool` 获取 `Direct3D11CaptureFrame`，帧中包含 GPU surface。实现时应避免每帧把像素拷回 CPU。
-
-性能策略：
-
-```text
-2560 x 1440
-  -> downsample 1/4
-640 x 360
-  -> blur
-640 x 360
-  -> upscale
-2560 x 1440
-```
-
-外围失焦不需要对原始分辨率做 30px Gaussian blur。降采样后模糊再放大，视觉上足够接近，GPU 成本更低。
+性能策略：外围失焦不需要对原始分辨率做 30px Gaussian blur——1/4 降采样模糊再放大，
+视觉足够接近，GPU 成本更低。
 
 ## 3. 统一 mask shader
 
@@ -128,29 +137,35 @@ Windows prototype 必须优先验证：
 
 这项验证比 blur shader 更关键。
 
-## 5. macOS 高级路线
-
-macOS 可能有更自然的系统级路径：
+## 5. macOS 实现（v0.1.x 现行架构）
 
 ```text
-transparent NSWindow
-  -> NSVisualEffectView
-     -> blendingMode = behindWindow
-     -> material = underWindowBackground or similar
-     -> maskImage = screen minus Focus Bubble region
+覆盖层窗口
+  ├─ 无边框窗口直接铺满显示器（不用原生全屏——会切 Space 接管屏幕）
+  ├─ 置顶 + 鼠标穿透 + macos-private-api feature（透明）
+  └─ 鼠标：tao cursor_position（修正 Retina Y 单位 bug：y/scale）
+
+模糊层（platform/macos.rs，系统毛玻璃，无需屏幕录制权限）
+  window-vibrancy 在 overlay 挂 behindWindow NSVisualEffectView
+  ├─ 材质随 blur 滑块分档：1-9 Menu / 10-19 Popover / 20+ Sidebar
+  │  （FOCUS_BUBBLE_MATERIAL=<数值> 可强制任意材质探索）
+  └─ mask 更新线程 60fps：
+      共享参数 + 修正后鼠标 → renderer::update_comfort（与 Windows 同一套）
+      → 160x90 RGBA mask（alpha 通道携带 mask 值；气泡椭圆 / 横带矩形 SDF+偏移）
+      → 手写 PNG 编码器（mask_png.rs，无图像库依赖）
+      → run_on_main_thread：NSImage(initWithData)
+         + setSize(view.bounds) + setCapInsets(1,1,1,1)  ← 必需，否则平铺
+         + setMaskImage
+
+暗化层（Canvas WebView，与模糊层叠加）
+  全屏 dim + 逐圈累积填充挖洞（12 圈同心圆角矩形，
+  alpha 由累积公式反解，精确复刻 mask 的 smoothstep 羽化轮廓，
+  两层过渡几何对齐——错位会产生亮暗边界线）
+
+诊断：每秒一条 [mac-blur] 日志（鼠标/屏幕/scale/参数/mask 采样）。
 ```
 
-`NSVisualEffectView` 的 `behindWindow` 模式由系统 compositor 使用窗口后方内容做混合和模糊。相比持续截屏，这条路径更符合 macOS 平台能力，值得优先实验。
-
-### macOS 已实现与踩坑记录（v0.3.x，`platform/macos.rs`）
-
-**当前实现**：
-
-- `window-vibrancy` 在 overlay 挂 behindWindow 的 NSVisualEffectView（material=Sidebar，取其最接近纯毛玻璃的浅色调；变暗由 Canvas 层负责，两层叠加）。
-- 更新线程 60fps：tao `cursor_position`（已修正 Retina Y 单位 bug）→ 共享舒适度层 `renderer::update_comfort`（与 Windows shader / Canvas 同一套呼吸参数）→ 160x90 RGBA mask（**alpha 通道携带 mask 值**，SDK 文档明确 alpha 通道作掩码；纯灰度图处处 alpha=1 等于全糊）→ 手写 PNG 编码器（`platform/mask_png.rs`，Node zlib 外部校验过字节）→ `run_on_main_thread` 中 `setSize(view.bounds)` + **`setCapInsets(1,1,1,1)`** + `setMaskImage`。
-- 每秒一条 `[mac-blur]` 诊断日志（本地鼠标/屏幕/缩放/生效参数/mask 采样）。
-
-**踩坑记录（按发现顺序）**：
+### 踩坑记录（按发现顺序）：
 
 1. 原生 `fullscreen(true)` 在 macOS 是切 Space 接管屏幕 → 黑屏。改为无边框窗口铺屏。
 2. `device_query` 需要辅助功能权限（弹窗还被 overlay 挡住）→ 换 tao `cursor_position`（NSEvent 被动查询，免权限）。
@@ -159,19 +174,12 @@ transparent NSWindow
 5. mask 图像不做垂直翻转（实测 maskImage 按图像正立渲染，翻转反而镜像）。
 6. **mask 图像默认不平铺拉伸**：SDK 文档要求 "properly set capInsets to stretch"。不设置 capInsets 时小图按原始尺寸平铺——用户看到的"一块块清晰小区域"就是 12x12 平铺；必须 `setCapInsets`。
 7. UnderWindowBackground 材质自带灰调（"灰蒙蒙"感）→ 换 Sidebar 材质。
+8. maskImage 掩码用的是图像 **alpha 通道**：纯灰度 PNG 处处 alpha=1 等于全糊。
+9. Canvas 挖洞若不显式设置全不透明 fillStyle，会复用暗化层的半透明色 → 横带内部残留暗度。
 
 **几何测试模式**：`FOCUS_BUBBLE_MASK_INVERT=1 npm run desktop:dev` 启动时反转 mask（圆内模糊、圆外清晰），直接观察 mask 认为的圆在哪里，用于校准映射。
 
-**模糊强度与材质**：vibrancy 模糊半径系统固定、不可连续调节。blur 滑块在 macOS 映射为三档材质：1-9=Menu（最通透毛玻璃）、10-19=Popover、20+=Sidebar（最实）。`FOCUS_BUBBLE_MATERIAL=<数值>` 可强制指定任意 NSVisualEffectMaterial（3=Titlebar 5=Menu 6=Popover 7=Sidebar 12=WindowBackground 21=UnderWindowBackground 等）用于探索观感。
-
-**待验证 / 后续路线**：
-
-- capInsets 拉伸后 mask 几何是否精确对位（用反转模式验收）。
-- NSVisualEffectView 的固有局限：模糊强度不可调（material 固定）、带色调。若要 Windows 级的渐变模糊，候选路线：
-  - a) CALayer `backgroundFilters` + CIGaussianBlur（半径可调，但 10.14+ 系统对 backgroundFilters 支持不稳，需实测）；
-  - b) ScreenCaptureKit（SCStream）捕获排除自身窗口的桌面 + Metal shader 模糊（最接近 Windows WGC 管线，工程量大，macOS 12.3+）；
-  - c) 接受 vibrancy 现状，把精力放回 Windows 主线。
-- 多显示器目前按主显示器处理（阶段 E）。
+**固有局限**：vibrancy 模糊半径不可调、材质带色调。若要 Windows 级渐变模糊，候选路线：a) CALayer `backgroundFilters` + CIGaussianBlur（10.14+ 支持不稳）；b) ScreenCaptureKit + Metal（最接近 WGC，工程量大）；c) 维持现状。多显示器目前按主显示器处理。
 
 ## 6. Linux 策略
 
@@ -246,46 +254,11 @@ LinuxCompositorRenderer
 
 ## 9. 当前实现状态
 
-已实现：
+已实现（细节见第 2/5 节）：
 
-- `src-tauri/src/platform/windows.rs`：Windows overlay capture exclusion。
-- `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`：启动时应用到 overlay 窗口。
-- `D3D11CreateDevice` probe：启动时验证当前机器是否能创建带 BGRA support 的 D3D11 hardware device。
-- `GraphicsCaptureSession::IsSupported()` probe：启动时验证系统是否支持 Windows Graphics Capture。
-- `IGraphicsCaptureItemInterop::CreateForMonitor` probe：使用 overlay 所在 monitor 创建 capture item。
-- `Direct3D11CaptureFramePool::CreateFreeThreaded` probe：用 WinRT `IDirect3DDevice` 创建 frame pool。
-- `CreateCaptureSession` + `StartCapture` probe：启动 capture session。
-- `TryGetNextFrame` probe：短时间轮询第一帧。
-- `Direct3D11CaptureFrame::Surface` probe：验证第一帧提供 GPU surface。
-- `DCompositionCreateDevice` probe：验证当前 D3D11 device 可用于 DirectComposition。
-- `CreateTargetForHwnd` probe：验证 overlay HWND 可作为 DirectComposition target。
-- `CreateSwapChainForComposition` probe：验证可创建带 premultiplied alpha 的 composition swapchain。
-- `IDXGISwapChain1::GetBuffer` + `CreateRenderTargetView` probe：验证 composition swapchain back buffer 可作为 D3D11 render target。
-- `ClearRenderTargetView` + `Present` probe：清透明 back buffer 并提交一帧。
-- `IDCompositionVisual::SetContent` + `IDCompositionTarget::SetRoot` + `Commit` probe：验证 swapchain 可提交到 overlay 的 DirectComposition visual tree。
-- `gpu_prototype_status` Tauri command：向前端返回平台、capture exclusion 和 renderer 状态。
-- 控制面板 renderer 状态区：显示 capture、frame surface、DirectComposition target、composition swapchain、present 和 commit 状态。
-- `src-tauri/src/platform/windows.rs`：`GpuRenderer`（阶段 A 已实现）。
-  - `GpuRenderer::start(window)`：spawn 专用 render thread，线程内完成 COM 初始化（`CoInitializeEx`）、D3D11 device、monitor capture item、`CreateFreeThreaded` frame pool、capture session、DComp target/visual、composition swapchain 的创建，初始化结果通过 channel 回传。
-  - render thread 持续循环：`TryGetNextFrame -> Surface -> ID3D11Texture2D -> CopyResource 到 swapchain back buffer -> Present(1)`；无新帧时 4ms 轮询；visual 树只在启动时 `Commit` 一次。
-  - `CopyResource` 前校验 capture texture 与 back buffer 的尺寸和 format，不匹配立即报错（阶段 B 换 shader copy pass 解决）。
-  - `GpuRenderer::stop()`：stop flag + join 线程，对象随线程栈销毁；`Drop` 自动 stop。
-  - 运行状态通过原子快照暴露：initialized、running、frames presented、capture size、last error。
-- `gpu_renderer_start` / `gpu_renderer_stop` Tauri command：控制直通渲染的启停；renderer 已死亡（device lost 等）时允许重新启动。
-- 控制面板 renderer 状态区新增「GPU 原图直通（阶段 A）」开关、直通运行状态、已呈现帧数、捕获尺寸和最近错误；状态每 2 秒轮询。
-- 「直通参数」回显：render thread 每帧把实际使用的物理像素参数写入状态，参数链路问题可直接从控制面板读出。
-- 系统托盘（`tray-icon` feature）：右键菜单「打开主面板 / 开启·关闭效果 / 退出」，左键点击打开主面板；开关效果会同时翻转 Rust 侧 GPU 参数和前端 settings（`effect-toggled` 事件）。
-- 关闭行为：主窗口关闭按钮默认隐藏到托盘（`close_to_tray`），控制面板「关闭时」可选「直接退出」；「退出」菜单 `app.exit(0)` 真正结束进程。此前"关窗后进程残留"的根因是全屏 overlay 窗口永不关闭，进程因此存活。
-- 气泡模式椭圆：`spot_scale_x` / `spot_scale_y` 拉伸系数（0.3–3.0），shader 里 `length((pixel - mouse) / scale)` 实现椭圆距离；Canvas fallback 用 translate + scale 实现同样效果；预览图用 `radial-gradient(ellipse ...)`。
-- 控制面板改纵向布局：预览图置顶（高度驱动），模式三列排在预览下方，强度滑块按模式动态显示（气泡：半径+双向拉伸；阅读：带高度；代码：行高度；羽化/模糊/暗度/平滑全模式共用），滑块两列排布，「恢复默认」一键重置（保留语言选择）。
-- 默认配置（开箱可见效果）：radius 240 / feather 180 / blur 10 / dim 0.55 / reading 260 / code 110 / 拉伸 1.0 / 托盘关闭。
-- `src-tauri/src/renderer/mod.rs`：`OverlayRenderer` trait 和 Canvas fallback 骨架。
-
-尚未实现：
-
-- 阶段 E 工程化：多显示器、DPI/resize、device-lost 恢复、设置持久化、快捷键/托盘。
-- GPU 侧鼠标 smoothing（当前直接跟随）。
-- blur 强度迭代（当前单轮 9-tap；不够强可加多轮迭代）。
+- Windows：完整 GPU 管线（WGC→shader→DComp）、光标透明孔、直通期间 WebView 隐藏、合成与捕获帧解耦、即时呈现 + 8ms 限频、启动 probe 全套。
+- macOS：vibrancy 毛玻璃 + alpha mask（capInsets 拉伸）、Canvas 暗化层 smoothstep 对齐、免权限鼠标、材质三档。
+- 共享：视觉舒适度层（dt 归一化）、参数按平台/按模式分离存储、托盘、应用内手动更新、7 语言、健康提示（首启确认 + 常驻警告）、效果关闭警告。
 
 ## 10. 接下来开发顺序
 
