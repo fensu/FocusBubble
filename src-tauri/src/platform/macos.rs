@@ -189,6 +189,8 @@ fn mask_update_loop(
             let data = NSData::with_bytes(png.as_slice());
             let allocated = mtm.alloc::<NSImage>();
             if let Some(image) = NSImage::initWithData(allocated, &data) {
+                // 图像 point 尺寸与视图 bounds 对齐，消除缩放映射歧义。
+                image.setSize(view.bounds().size);
                 view.setMaskImage(Some(&image));
             }
         });
@@ -238,6 +240,23 @@ fn render_mask_pixels(
         }
     }
 
-    data
+    // AppKit 非翻转坐标系：图像 y=0 在视图底部，本函数按顶部原点计算，
+    // 输出前垂直翻转，否则清晰区出现在鼠标的镜像位置。
+    let mut flipped = vec![0u8; MASK_WIDTH * MASK_HEIGHT];
+    for y in 0..MASK_HEIGHT {
+        let source_row = MASK_HEIGHT - 1 - y;
+        flipped[y * MASK_WIDTH..][..MASK_WIDTH]
+            .copy_from_slice(&data[source_row * MASK_WIDTH..][..MASK_WIDTH]);
+    }
+
+    // 诊断标记：输出图像左上角 4x4 置黑。屏幕上应显示为左上角小块清晰区；
+    // 出现在其他方位说明映射仍有翻转/偏移。
+    for y in 0..4 {
+        for x in 0..4 {
+            flipped[y * MASK_WIDTH + x] = 0;
+        }
+    }
+
+    flipped
 }
 

@@ -31,7 +31,7 @@ objc2-app-kit = { version = "0.3", features = [
   "NSImage",
   "NSWindow",
 ] }
-objc2-foundation = { version = "0.3", features = ["NSData"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSGeometry"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
