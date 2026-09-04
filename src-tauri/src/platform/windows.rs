@@ -705,6 +705,7 @@ fn run_capture_display_loop(
     let mut comfort = crate::renderer::ComfortState::new();
     let mut comfort_tick = Instant::now();
     let mut has_capture = false;
+    let mut last_render = Instant::now();
     let mut last_rendered_mouse = [f32::NEG_INFINITY; 2];
     let mut last_rendered_params: Option<crate::renderer::GpuRendererParams> = None;
 
@@ -784,12 +785,15 @@ fn run_capture_display_loop(
                 > 0.75);
         let params_changed = last_rendered_params != Some(effective_params);
 
-        if has_capture && (has_new_frame || mouse_moved || params_changed) {
+        // Present(0) 后自行限频：最快 8ms 一次合成，避免空转烧 GPU。
+        let render_due = last_render.elapsed() >= Duration::from_millis(8);
+        if has_capture && render_due && (has_new_frame || mouse_moved || params_changed) {
             match render_blur_frame(
                 &objects,
                 &objects.owned_capture_texture,
                 effective_params,
                 smoothed_mouse,
+                comfort.ease(),
             ) {
                 Ok(()) => {
                     frames_presented += 1;
@@ -799,6 +803,7 @@ fn run_capture_display_loop(
                         .store(frames_presented, Ordering::Relaxed);
                     last_rendered_mouse = smoothed_mouse;
                     last_rendered_params = Some(effective_params);
+                    last_render = Instant::now();
                 }
                 Err(error) => break Some(error),
             }
@@ -971,6 +976,8 @@ cbuffer Params : register(b0)
     float enabled : packoffset(c3.w);
     float spotScaleX : packoffset(c4.x);
     float spotScaleY : packoffset(c4.y);
+    float holeRadius : packoffset(c4.z);
+    float holeFeather : packoffset(c4.w);
 };
 
 struct PSInput
@@ -1045,7 +1052,9 @@ float4 PSComposite(PSInput input) : SV_Target
 
     if (enabled < 0.5)
     {
-        return float4(original.rgb, 1.0);
+        float2 px0 = input.uv * screenSize;
+        float hole0 = smoothstep(holeRadius, holeRadius + max(holeFeather, 1.0), distance(px0, mouse));
+        return float4(original.rgb * hole0, hole0);
     }
 
     float4 blurred = blurTex.Sample(linearSampler, input.uv);
@@ -1056,8 +1065,15 @@ float4 PSComposite(PSInput input) : SV_Target
     float3 periphery = lerp(original.rgb, blurred.rgb, blurMix) * (1.0 - dim);
     float3 color = lerp(original.rgb, periphery, mask);
 
-    // swapchain 是 premultiplied alpha；直通画面整体不透明。
-    return float4(color, 1.0);
+    // 光标孔：孔内 alpha=0，overlay 透出底下真实桌面——实时、零延迟、
+    // 真光标原位显示，捕获画面里的旧光标（拖影）被完全盖住。
+    // 孔径随速度扩大，覆盖快速移动时的拖尾。
+    float cursorDist = distance(pixel, mouse);
+    float hole = smoothstep(holeRadius, holeRadius + max(holeFeather, 1.0), cursorDist);
+    float alpha = hole;
+
+    // swapchain 是 premultiplied alpha。
+    return float4(color * alpha, alpha);
 }
 "#;
 
@@ -1081,7 +1097,8 @@ struct ShaderConstants {
     enabled: f32,
     spot_scale_x: f32,
     spot_scale_y: f32,
-    pad: [f32; 2],
+    hole_radius: f32,
+    hole_feather: f32,
 }
 
 struct ShaderPipeline {
@@ -1312,6 +1329,7 @@ fn render_blur_frame(
     capture_texture: &ID3D11Texture2D,
     params: GpuRendererParams,
     mouse: [f32; 2],
+    hole_ease: f32,
 ) -> Result<(), String> {
     let device = &objects.device;
     let context = &objects.context;
@@ -1359,7 +1377,9 @@ fn render_blur_frame(
         enabled: if params.enabled { 1.0 } else { 0.0 },
         spot_scale_x: params.spot_scale_x.max(0.1),
         spot_scale_y: params.spot_scale_y.max(0.1),
-        pad: [0.0; 2],
+        // 光标孔：半径 56px + 速度扩张（覆盖快速移动的拖尾），羽化 48px。
+        hole_radius: 56.0 + 48.0 * hole_ease,
+        hole_feather: 48.0,
     };
 
     unsafe {
@@ -1411,9 +1431,11 @@ fn render_blur_frame(
         context.OMSetRenderTargets(None, None);
         context.PSSetShaderResources(0, Some(&[None, None]));
 
+        // Present(0)：立即提交不等待 vsync，降低捕获->呈现链路延迟
+        // （拖影距离 = 延迟 x 速度）；DWM 仍按刷新率合成，不会撕裂。
         objects
             .swapchain
-            .Present(1, DXGI_PRESENT(0))
+            .Present(0, DXGI_PRESENT(0))
             .ok()
             .map_err(|error| format!("IDXGISwapChain1::Present failed: {error}"))?;
     }

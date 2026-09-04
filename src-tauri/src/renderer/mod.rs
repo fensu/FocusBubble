@@ -112,6 +112,11 @@ impl ComfortState {
     pub fn smoothed_speed(&self) -> f32 {
         self.smoothed_speed
     }
+
+    /// 双重平滑后的速度因子（0-1），用于光标孔随速度扩张等。
+    pub fn ease(&self) -> f32 {
+        self.ease
+    }
 }
 
 /// 输入用户原始参数和原始鼠标位置，输出平滑后的鼠标位置和当帧生效参数。
