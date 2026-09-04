@@ -614,6 +614,9 @@ pub fn run() {
                 // 移动/DWM 重合成后顶部出现渲染残留条的问题。
                 .background_color(tauri::webview::Color(0, 0, 0, 0))
                 .decorations(false)
+                // 覆盖层不可调整大小：Win10 会给可调整的无边框窗口在顶部
+                // 保留 DWM 调整框架带（视觉遮挡的嫌疑来源）。
+                .resizable(false)
                 .transparent(true)
                 .always_on_top(true)
                 .skip_taskbar(true)

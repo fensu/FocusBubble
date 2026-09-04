@@ -704,6 +704,9 @@ fn run_capture_display_loop(
     let mut second_start = Instant::now();
     let mut comfort = crate::renderer::ComfortState::new();
     let mut comfort_tick = Instant::now();
+    let mut has_capture = false;
+    let mut last_rendered_mouse = [f32::NEG_INFINITY; 2];
+    let mut last_rendered_params: Option<crate::renderer::GpuRendererParams> = None;
 
     let loop_error: Option<String> = loop {
         if stop_flag.load(Ordering::Relaxed) {
@@ -717,50 +720,87 @@ fn run_capture_display_loop(
             second_start = Instant::now();
         }
 
-        match objects.frame_pool.TryGetNextFrame() {
+        let raw_params = *params
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let raw_mouse = mouse_position_in_monitor(hmonitor.0);
+        let dt = comfort_tick.elapsed().as_secs_f32();
+        comfort_tick = Instant::now();
+        let (smoothed_mouse, effective_params) =
+            crate::renderer::update_comfort(&raw_params, raw_mouse, &mut comfort, dt);
+
+        if let Ok(mut applied) = status.applied_params.lock() {
+            *applied = Some(format!(
+                "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={}x{}+{},{} sx={:.2} sy={:.2} mouse={:.0},{:.0} v={:.0}px/s",
+                effective_params.enabled,
+                effective_params.mode,
+                effective_params.radius,
+                effective_params.feather,
+                effective_params.dim,
+                effective_params.blur_px,
+                effective_params.band_half_w,
+                effective_params.band_half_h,
+                effective_params.band_offset_x,
+                effective_params.band_offset_y,
+                effective_params.spot_scale_x,
+                effective_params.spot_scale_y,
+                smoothed_mouse[0],
+                smoothed_mouse[1],
+                comfort.smoothed_speed()
+            ));
+        }
+
+        // 新捕获帧：拷入自有纹理（与 frame pool 缓冲生命周期解耦）。
+        let has_new_frame = match objects.frame_pool.TryGetNextFrame() {
             Ok(frame) => {
-                let raw_params = *params
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let raw_mouse = mouse_position_in_monitor(hmonitor.0);
-                let dt = comfort_tick.elapsed().as_secs_f32();
-                comfort_tick = Instant::now();
-                let (smoothed_mouse, effective_params) =
-                    crate::renderer::update_comfort(&raw_params, raw_mouse, &mut comfort, dt);
-
-                if let Ok(mut applied) = status.applied_params.lock() {
-                    *applied = Some(format!(
-                        "enabled={} mode={} radius={:.0} feather={:.0} dim={:.2} blur={:.0} band={}x{}+{},{} sx={:.2} sy={:.2} mouse={:.0},{:.0} v={:.0}px/s",
-                        effective_params.enabled,
-                        effective_params.mode,
-                        effective_params.radius,
-                        effective_params.feather,
-                        effective_params.dim,
-                        effective_params.blur_px,
-                        effective_params.band_half_w,
-                        effective_params.band_half_h,
-                        effective_params.band_offset_x,
-                        effective_params.band_offset_y,
-                        effective_params.spot_scale_x,
-                        effective_params.spot_scale_y,
-                        smoothed_mouse[0],
-                        smoothed_mouse[1],
-                        comfort.smoothed_speed()
-                    ));
-                }
-
-                match render_blur_frame(&objects, &frame, effective_params, smoothed_mouse) {
-                    Ok(()) => {
-                        frames_presented += 1;
-                        second_frames += 1;
-                        status
-                            .frames_presented
-                            .store(frames_presented, Ordering::Relaxed);
-                    }
-                    Err(error) => break Some(error),
-                }
+                let copied = frame
+                    .Surface()
+                    .and_then(|surface| surface.cast::<IDirect3DDxgiInterfaceAccess>())
+                    .and_then(|access| unsafe { access.GetInterface::<ID3D11Texture2D>() })
+                    .map(|texture| {
+                        unsafe {
+                            objects
+                                .context
+                                .CopyResource(&objects.owned_capture_texture, &texture)
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                copied
             }
-            Err(_) => thread::sleep(Duration::from_millis(4)),
+            Err(_) => false,
+        };
+        if has_new_frame {
+            has_capture = true;
+        }
+
+        // 合成与捕获帧解耦：鼠标/参数变化即用缓存画面重复合成，
+        // 静态桌面（WGC 因光标捕获关闭不再产帧）也能保持遮罩跟手。
+        let mouse_moved = (smoothed_mouse[0] - last_rendered_mouse[0]).abs()
+            + (smoothed_mouse[1] - last_rendered_mouse[1]).abs()
+            > 0.75;
+        let params_changed = last_rendered_params != Some(effective_params);
+
+        if has_capture && (has_new_frame || mouse_moved || params_changed) {
+            match render_blur_frame(
+                &objects,
+                &objects.owned_capture_texture,
+                effective_params,
+                smoothed_mouse,
+            ) {
+                Ok(()) => {
+                    frames_presented += 1;
+                    second_frames += 1;
+                    status
+                        .frames_presented
+                        .store(frames_presented, Ordering::Relaxed);
+                    last_rendered_mouse = smoothed_mouse;
+                    last_rendered_params = Some(effective_params);
+                }
+                Err(error) => break Some(error),
+            }
+        } else {
+            thread::sleep(Duration::from_millis(4));
         }
     };
 
@@ -800,6 +840,9 @@ struct CaptureDisplayObjects {
     _visual: IDCompositionVisual,
     swapchain: IDXGISwapChain1,
     pipeline: ShaderPipeline,
+    /// 捕获画面的自有副本：与 frame pool 缓冲生命周期解耦，静态桌面
+    /// （WGC 不产新帧）时仍可用缓存画面重复合成，遮罩跟手不受影响。
+    owned_capture_texture: ID3D11Texture2D,
     capture_width: u32,
     capture_height: u32,
 }
@@ -833,6 +876,28 @@ fn build_capture_display_objects(
 
     let pipeline = build_shader_pipeline(&device, capture_width, capture_height)?;
 
+    // 捕获画面的自有副本（见 CaptureDisplayObjects::owned_capture_texture）。
+    let owned_desc = D3D11_TEXTURE2D_DESC {
+        Width: capture_width,
+        Height: capture_height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut owned_capture_texture: Option<ID3D11Texture2D> = None;
+    unsafe {
+        device
+            .CreateTexture2D(&owned_desc, None, Some(&mut owned_capture_texture))
+            .map_err(|error| format!("CreateTexture2D failed for owned capture copy: {error}"))?;
+    }
+    let owned_capture_texture = owned_capture_texture
+        .ok_or_else(|| "CreateTexture2D returned no owned capture copy".to_string())?;
+
     // visual 树只在启动时提交一次；之后 swapchain 的 Present 会自动驱动 DComp。
     let visual = unsafe { composition_device.CreateVisual() }
         .map_err(|error| format!("IDCompositionDevice::CreateVisual failed: {error}"))?;
@@ -858,6 +923,7 @@ fn build_capture_display_objects(
         _visual: visual,
         swapchain,
         pipeline,
+        owned_capture_texture,
         capture_width,
         capture_height,
     })
@@ -1231,22 +1297,10 @@ fn viewport(width: u32, height: u32) -> D3D11_VIEWPORT {
 
 fn render_blur_frame(
     objects: &CaptureDisplayObjects,
-    frame: &windows::Graphics::Capture::Direct3D11CaptureFrame,
+    capture_texture: &ID3D11Texture2D,
     params: GpuRendererParams,
     mouse: [f32; 2],
 ) -> Result<(), String> {
-    let surface = frame
-        .Surface()
-        .map_err(|error| format!("Direct3D11CaptureFrame::Surface failed: {error}"))?;
-    let access = surface
-        .cast::<IDirect3DDxgiInterfaceAccess>()
-        .map_err(|error| {
-            format!("failed to cast IDirect3DSurface to IDirect3DDxgiInterfaceAccess: {error}")
-        })?;
-    let capture_texture: ID3D11Texture2D = unsafe { access.GetInterface() }.map_err(|error| {
-        format!("IDirect3DDxgiInterfaceAccess::GetInterface<ID3D11Texture2D> failed: {error}")
-    })?;
-
     let device = &objects.device;
     let context = &objects.context;
     let pipeline = &objects.pipeline;
@@ -1255,7 +1309,7 @@ fn render_blur_frame(
     let mut capture_srv: Option<ID3D11ShaderResourceView> = None;
     unsafe {
         device
-            .CreateShaderResourceView(&capture_texture, None, Some(&mut capture_srv))
+            .CreateShaderResourceView(capture_texture, None, Some(&mut capture_srv))
             .map_err(|error| format!("CreateShaderResourceView failed for capture: {error}"))?;
     }
     let capture_srv = capture_srv

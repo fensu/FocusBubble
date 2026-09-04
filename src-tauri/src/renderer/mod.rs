@@ -33,7 +33,7 @@ pub struct OverlayRenderSettings {
 
 /// GPU renderer 的 shader 参数。长度是物理像素（拉伸系数除外），
 /// 由命令层把前端 CSS 像素乘以 scale factor 换算好。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuRendererParams {
     pub enabled: bool,
     /// 0 = spotlight, 1 = band（阅读/代码已合并）
