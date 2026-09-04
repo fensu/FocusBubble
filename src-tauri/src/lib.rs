@@ -590,30 +590,24 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let overlay = {
-                let builder = WebviewWindowBuilder::new(
-                    app,
-                    "overlay",
-                    WebviewUrl::App("index.html#overlay".into()),
-                )
-                .title("Focus Bubble Overlay")
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .shadow(false);
+            let overlay = WebviewWindowBuilder::new(
+                app,
+                "overlay",
+                WebviewUrl::App("index.html#overlay".into()),
+            )
+            // 标题置空：无边框窗口在某些 Windows 全屏/无边框组合下仍可能
+            // 渲染出顶部标题条，至少不显示文字。
+            .title("")
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .build()?;
 
-                // Windows 无边框全屏；macOS 原生全屏会切 Space 并接管屏幕
-                // （菜单栏/Dock 消失、授权弹窗被挡），改为覆盖屏幕的无边框窗口。
-                #[cfg(not(target_os = "macos"))]
-                let builder = builder.fullscreen(true);
-                #[cfg(target_os = "macos")]
-                let builder = builder.resizable(false);
-
-                builder.build()?
-            };
-
-            #[cfg(target_os = "macos")]
+            // 覆盖层不使用"全屏"状态：原生 fullscreen 在 Windows 上可能给
+            // 无边框窗口带入顶部标题条，在 macOS 上会切 Space 接管屏幕。
+            // 统一用普通无边框窗口铺满所在显示器。
             if let Ok(Some(monitor)) = overlay.current_monitor() {
                 let _ = overlay.set_position(tauri::PhysicalPosition::new(
                     monitor.position().x,
