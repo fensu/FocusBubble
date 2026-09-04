@@ -249,14 +249,6 @@ fn render_mask_pixels(
             .copy_from_slice(&data[source_row * MASK_WIDTH..][..MASK_WIDTH]);
     }
 
-    // 诊断标记：输出图像左上角 4x4 置黑。屏幕上应显示为左上角小块清晰区；
-    // 出现在其他方位说明映射仍有翻转/偏移。
-    for y in 0..4 {
-        for x in 0..4 {
-            flipped[y * MASK_WIDTH + x] = 0;
-        }
-    }
-
     flipped
 }
 
