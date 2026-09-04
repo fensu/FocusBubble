@@ -162,6 +162,8 @@ transparent NSWindow
 
 **几何测试模式**：`FOCUS_BUBBLE_MASK_INVERT=1 npm run desktop:dev` 启动时反转 mask（圆内模糊、圆外清晰），直接观察 mask 认为的圆在哪里，用于校准映射。
 
+**模糊强度与材质**：vibrancy 模糊半径系统固定、不可连续调节。blur 滑块在 macOS 映射为三档材质：1-9=Menu（最通透毛玻璃）、10-19=Popover、20+=Sidebar（最实）。`FOCUS_BUBBLE_MATERIAL=<数值>` 可强制指定任意 NSVisualEffectMaterial（3=Titlebar 5=Menu 6=Popover 7=Sidebar 12=WindowBackground 21=UnderWindowBackground 等）用于探索观感。
+
 **待验证 / 后续路线**：
 
 - capInsets 拉伸后 mask 几何是否精确对位（用反转模式验收）。

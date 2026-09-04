@@ -17,7 +17,9 @@ use std::{
     time::Duration,
 };
 
-use objc2_app_kit::{NSImage, NSView, NSVisualEffectView};
+use objc2_app_kit::{
+    NSImage, NSView, NSVisualEffectMaterial as NSVisualEffectMaterialRaw, NSVisualEffectView,
+};
 use objc2_foundation::{MainThreadMarker, NSData, NSEdgeInsets};
 use tauri::Manager;
 
@@ -109,6 +111,21 @@ pub fn start_mac_blur(app: &tauri::AppHandle, params: Arc<Mutex<GpuRendererParam
     thread::spawn(move || mask_update_loop(handle, params, effect_ptr));
 }
 
+/// blur 滑块在 macOS 上映射为三档材质（vibrancy 的模糊半径系统固定，
+/// 用材质的通透度近似强弱）：低=Menu（最通透的毛玻璃）、中=Popover、
+/// 高=Sidebar（最实）。返回 NSVisualEffectMaterial 原始值；0 表示关闭。
+fn material_tier_for(blur_px: f32) -> isize {
+    if blur_px < 1.0 {
+        0 // 关闭：mask 全黑，材质无意义
+    } else if blur_px < 10.0 {
+        5 // Menu
+    } else if blur_px < 20.0 {
+        6 // Popover
+    } else {
+        7 // Sidebar
+    }
+}
+
 fn mask_update_loop(
     handle: tauri::AppHandle,
     params: Arc<Mutex<GpuRendererParams>>,
@@ -122,6 +139,13 @@ fn mask_update_loop(
     // 几何测试模式：FOCUS_BUBBLE_MASK_INVERT=1 时反转 mask（圆内模糊、圆外清晰），
     // 用于直接观察 mask 认为的"圆"到底在哪。正常模式恒为 false。
     let invert_mask = std::env::var("FOCUS_BUBBLE_MASK_INVERT").ok().as_deref() == Some("1");
+    // 材质探索：FOCUS_BUBBLE_MATERIAL=<NSVisualEffectMaterial 数值> 强制指定材质
+    // （如 5=Menu 6=Popover 7=Sidebar 3=Titlebar 12=WindowBackground 21=UnderWindowBackground），
+    // 便于一次构建逐个试效果。
+    let material_override = std::env::var("FOCUS_BUBBLE_MATERIAL")
+        .ok()
+        .and_then(|value| value.parse::<isize>().ok());
+    let mut current_material: isize = 7;
 
     loop {
         thread::sleep(Duration::from_millis(16));
@@ -190,12 +214,24 @@ fn mask_update_loop(
 
         let png = encode_mask_png(MASK_WIDTH, MASK_HEIGHT, &pixels);
 
+        // 材质随 blur 档位切换（或被环境变量锁定）。
+        let target_material = material_override
+            .unwrap_or_else(|| material_tier_for(effective_params.blur_px));
+        let material_to_set = (target_material != 0 && target_material != current_material)
+            .then_some(target_material);
+        if let Some(material) = material_to_set {
+            current_material = material;
+        }
+
         let send = handle.clone();
         let result = send.run_on_main_thread(move || unsafe {
             let Some(mtm) = MainThreadMarker::new() else {
                 return;
             };
             let view: &NSVisualEffectView = &*(effect_ptr as *const NSVisualEffectView);
+            if let Some(material) = material_to_set {
+                view.setMaterial(NSVisualEffectMaterialRaw(material));
+            }
             let data = NSData::with_bytes(png.as_slice());
             let allocated = mtm.alloc::<NSImage>();
             if let Some(image) = NSImage::initWithData(allocated, &data) {
