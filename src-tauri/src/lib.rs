@@ -75,6 +75,9 @@ struct GpuPrototypeStatus {
     gpu_renderer_capture_size: Option<String>,
     gpu_renderer_last_error: Option<String>,
     gpu_renderer_params: Option<String>,
+    /// 效果总开关当前值（来自共享参数，直通/原生模糊运行时若为 false
+    /// 前端显示"遮罩未生效"警告）。
+    effects_enabled: bool,
     native_blur_running: bool,
     gpu_capture_pipeline: &'static str,
     renderer_backend: &'static str,
@@ -117,6 +120,11 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
     let captured_frame_copied_to_swapchain = state
         .captured_frame_copied_to_swapchain
         .load(Ordering::Relaxed);
+    let effects_enabled = state
+        .gpu_renderer_params
+        .lock()
+        .map(|params| params.enabled)
+        .unwrap_or(false);
 
     #[cfg(target_os = "windows")]
     let renderer_snapshot = state
@@ -174,6 +182,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_capture_size: status.gpu_renderer_capture_size,
             gpu_renderer_last_error: status.gpu_renderer_last_error,
             gpu_renderer_params: status.gpu_renderer_params,
+            effects_enabled,
             native_blur_running: false,
             gpu_capture_pipeline: status.gpu_capture_pipeline,
             renderer_backend: status.renderer_backend,
@@ -224,6 +233,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_capture_size: None,
             gpu_renderer_last_error: None,
             gpu_renderer_params: None,
+            effects_enabled,
             native_blur_running,
             gpu_capture_pipeline: "native per-platform renderer",
             renderer_backend: backend,

@@ -494,3 +494,35 @@ select:focus-visible {
     text-align: left;
   }
 }
+
+.statusWarning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e3c98a;
+  border-radius: 8px;
+  background: #fdf6e3;
+  color: #7a5d1f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.statusWarning span {
+  flex: 1;
+}
+
+.statusWarning button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #c9a24b;
+  border-radius: 7px;
+  background: #f5e3bb;
+  color: #5d4715;
+  font: 650 12px/1 var(--sans);
+  cursor: pointer;
+}
+
+.statusWarning button:hover {
+  background: #f0d89c;
+}

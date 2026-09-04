@@ -71,6 +71,7 @@ type GpuPrototypeStatus = {
   gpuRendererCaptureSize: string | null
   gpuRendererLastError: string | null
   gpuRendererParams: string | null
+  effectsEnabled: boolean
   nativeBlurRunning: boolean
   gpuCapturePipeline: string
   rendererBackend: string
@@ -147,6 +148,8 @@ const copy = {
     checkUpdates: '检查更新',
     upToDate: '已是最新',
     installUpdate: '安装更新',
+    effectsOffWarning: '效果已关闭：遮罩未生效，点击右侧按钮开启',
+    enableEffects: '开启效果',
     updateDownloading: '下载中',
     updateInstalling: '正在更新…',
     preview: '遮罩预览',
@@ -218,6 +221,8 @@ const copy = {
     checkUpdates: 'Check for updates',
     upToDate: 'Up to date',
     installUpdate: 'Install update',
+    effectsOffWarning: 'Effects are off: the mask is inactive. Use the button to turn them on',
+    enableEffects: 'Turn on effects',
     updateDownloading: 'Downloading',
     updateInstalling: 'Updating…',
     preview: 'Mask preview',
@@ -289,6 +294,8 @@ const copy = {
     checkUpdates: '更新を確認',
     upToDate: '最新です',
     installUpdate: '更新をインストール',
+    effectsOffWarning: '効果がオフ：マスクが無効です。右のボタンでオンにできます',
+    enableEffects: '効果をオン',
     updateDownloading: 'ダウンロード中',
     updateInstalling: '更新中…',
     preview: 'マスクプレビュー',
@@ -360,6 +367,8 @@ const copy = {
     checkUpdates: '업데이트 확인',
     upToDate: '최신 버전입니다',
     installUpdate: '업데이트 설치',
+    effectsOffWarning: '효과 꺼짐: 마스크가 비활성입니다. 오른쪽 버튼으로 켤 수 있습니다',
+    enableEffects: '효과 켜기',
     updateDownloading: '다운로드 중',
     updateInstalling: '업데이트 중…',
     preview: '마스크 미리보기',
@@ -431,6 +440,8 @@ const copy = {
     checkUpdates: 'Nach Updates suchen',
     upToDate: 'Aktuell',
     installUpdate: 'Update installieren',
+    effectsOffWarning: 'Effekte aus: Die Maske ist inaktiv. Über die Schaltfläche einschalten',
+    enableEffects: 'Effekte einschalten',
     updateDownloading: 'Wird geladen',
     updateInstalling: 'Aktualisiere…',
     preview: 'Masken-Vorschau',
@@ -502,6 +513,8 @@ const copy = {
     checkUpdates: 'Rechercher des mises à jour',
     upToDate: 'À jour',
     installUpdate: 'Installer la mise à jour',
+    effectsOffWarning: 'Effets désactivés : le masque est inactif. Activez-les via le bouton',
+    enableEffects: 'Activer les effets',
     updateDownloading: 'Téléchargement',
     updateInstalling: 'Mise à jour…',
     preview: 'Aperçu du masque',
@@ -573,6 +586,8 @@ const copy = {
     checkUpdates: 'Buscar actualizaciones',
     upToDate: 'Actualizado',
     installUpdate: 'Instalar actualización',
+    effectsOffWarning: 'Efectos desactivados: la máscara está inactiva. Actívelos con el botón',
+    enableEffects: 'Activar efectos',
     updateDownloading: 'Descargando',
     updateInstalling: 'Actualizando…',
     preview: 'Vista previa de máscara',
@@ -837,6 +852,7 @@ function ControlPanel() {
               gpuRendererCaptureSize: null,
               gpuRendererLastError: null,
               gpuRendererParams: null,
+              effectsEnabled: false,
               nativeBlurRunning: false,
               gpuCapturePipeline: t.browserPipeline,
               rendererBackend: t.canvasFallback,
@@ -1191,6 +1207,7 @@ function ControlPanel() {
                 labels={t}
                 passthroughBusy={passthroughBusy}
                 onTogglePassthrough={togglePassthrough}
+                onEnableEffects={() => update('enabled', true)}
               />
             )}
           </aside>
@@ -1205,12 +1222,25 @@ function GpuStatusPanel({
   labels,
   passthroughBusy,
   onTogglePassthrough,
+  onEnableEffects,
 }: {
   status: GpuPrototypeStatus
   labels: (typeof copy)[Language]
   passthroughBusy: boolean
   onTogglePassthrough: () => void
+  onEnableEffects: () => void
 }) {
+  // 渲染器在跑但效果总开关关闭：给出显眼警告 + 一键开启。
+  const effectsInactive =
+    (status.gpuRendererRunning || status.nativeBlurRunning) && !status.effectsEnabled
+  const warning = effectsInactive ? (
+    <div className="statusWarning">
+      <span>{labels.effectsOffWarning}</span>
+      <button type="button" onClick={onEnableEffects}>
+        {labels.enableEffects}
+      </button>
+    </div>
+  ) : null
   // 非 Windows 只显示平台与原生渲染器状态；WGC/D3D 探测行仅对 Windows 有意义。
   if (status.platform !== 'windows') {
     return (
@@ -1219,6 +1249,7 @@ function GpuStatusPanel({
           <Gauge size={18} />
           <span>{labels.renderer}</span>
         </div>
+        {warning}
         <dl>
           <div>
             <dt>{labels.platform}</dt>
@@ -1261,6 +1292,7 @@ function GpuStatusPanel({
         </button>
       </div>
       <p className="passthroughHint">{labels.gpuPassthrough}</p>
+      {warning}
       <dl>
         <div>
           <dt>{labels.platform}</dt>
