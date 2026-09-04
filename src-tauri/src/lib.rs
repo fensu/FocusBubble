@@ -306,8 +306,9 @@ struct GpuRendererParamsPayload {
     /// 横带全宽；CSS 像素。
     band_width: f32,
     /// 横带中心相对鼠标的偏移（CSS 像素，top-left 原点）。
-    band_offset_x: f32,
-    band_offset_y: f32,
+    /// 字段名必须与前端 payload key（offsetX/offsetY）经 camelCase 对齐。
+    offset_x: f32,
+    offset_y: f32,
     spotlight_scale_x: f32,
     spotlight_scale_y: f32,
     smoothing: f32,
@@ -343,8 +344,8 @@ fn gpu_renderer_set_params(
         blur_px: params.blur * scale,
         band_half_h: params.band_height * 0.5 * scale,
         band_half_w: params.band_width * 0.5 * scale,
-        band_offset_x: params.band_offset_x * scale,
-        band_offset_y: params.band_offset_y * scale,
+        band_offset_x: params.offset_x * scale,
+        band_offset_y: params.offset_y * scale,
         spot_scale_x: params.spotlight_scale_x,
         spot_scale_y: params.spotlight_scale_y,
         tracking_alpha: params.smoothing.clamp(0.01, 1.0),
