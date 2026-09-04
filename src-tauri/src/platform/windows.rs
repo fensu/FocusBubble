@@ -776,9 +776,12 @@ fn run_capture_display_loop(
 
         // 合成与捕获帧解耦：鼠标/参数变化即用缓存画面重复合成，
         // 静态桌面（WGC 因光标捕获关闭不再产帧）也能保持遮罩跟手。
-        let mouse_moved = (smoothed_mouse[0] - last_rendered_mouse[0]).abs()
-            + (smoothed_mouse[1] - last_rendered_mouse[1]).abs()
-            > 0.75;
+        // 光标捕获开启时移动鼠标会自然产帧；此时用缓存重复合成反而会
+        // 反复绘制旧光标位置（闪烁），因此鼠标触发仅在捕获关闭时启用。
+        let mouse_moved = objects.cursor_capture_disabled
+            && ((smoothed_mouse[0] - last_rendered_mouse[0]).abs()
+                + (smoothed_mouse[1] - last_rendered_mouse[1]).abs()
+                > 0.75);
         let params_changed = last_rendered_params != Some(effective_params);
 
         if has_capture && (has_new_frame || mouse_moved || params_changed) {
@@ -843,6 +846,9 @@ struct CaptureDisplayObjects {
     /// 捕获画面的自有副本：与 frame pool 缓冲生命周期解耦，静态桌面
     /// （WGC 不产新帧）时仍可用缓存画面重复合成，遮罩跟手不受影响。
     owned_capture_texture: ID3D11Texture2D,
+    /// 光标捕获是否已成功关闭（仅 FOCUS_BUBBLE_DISABLE_CURSOR_CAPTURE=1）；
+    /// 此时光标移动不再产帧，需要鼠标触发的重复合成。
+    cursor_capture_disabled: bool,
     capture_width: u32,
     capture_height: u32,
 }
@@ -860,10 +866,15 @@ fn build_capture_display_objects(
         .map_err(|error| format!("CreateCaptureSession failed: {error}"))?;
     // 系统捕获提示条会污染直通画面，尽量关掉；权限不足时忽略，不影响管线。
     let _ = session.SetIsBorderRequired(false);
-    // 捕获画面默认包含鼠标指针（捕获时刻的旧位置），与系统实时绘制的真实
-    // 光标叠加形成"残影"。关闭光标捕获后只保留真实光标（无延迟）。
-    // Win10 2004+ 支持；旧系统调用失败时维持现状。
-    let _ = session.SetIsCursorCaptureEnabled(false);
+    // 光标捕获默认保持开启：Win10 上关闭存在已知缺陷（光标会间歇性混入
+    // 捕获画面，与系统真实光标叠成"箭头闪烁"）；且光标被捕获时移动鼠标
+    // 本身就触发新帧，遮罩自然跟手。Win11 上可用
+    // FOCUS_BUBBLE_DISABLE_CURSOR_CAPTURE=1 关闭以消除拖影。
+    let cursor_capture_disabled =
+        std::env::var("FOCUS_BUBBLE_DISABLE_CURSOR_CAPTURE").ok().as_deref() == Some("1");
+    if cursor_capture_disabled {
+        let _ = session.SetIsCursorCaptureEnabled(false);
+    }
     session
         .StartCapture()
         .map_err(|error| format!("GraphicsCaptureSession::StartCapture failed: {error}"))?;
@@ -924,6 +935,7 @@ fn build_capture_display_objects(
         swapchain,
         pipeline,
         owned_capture_texture,
+        cursor_capture_disabled,
         capture_width,
         capture_height,
     })

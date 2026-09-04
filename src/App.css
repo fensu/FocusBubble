@@ -576,3 +576,9 @@ select:focus-visible {
 .healthCard button:hover {
   background: #f0d89c;
 }
+
+.statusWarning.health {
+  border-color: #e8d9a8;
+  background: #fdf9ec;
+  color: #6d5a20;
+}

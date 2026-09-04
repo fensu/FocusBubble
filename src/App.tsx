@@ -155,6 +155,7 @@ const copy = {
     checkUpdates: '检查更新',
     upToDate: '已是最新',
     installUpdate: '安装更新',
+    healthReminder: '健康提示：使用中如出现频闪或任何不适，请立即关闭效果并休息',
     effectsOffWarning: '效果已关闭：遮罩未生效，点击右侧按钮开启',
     enableEffects: '开启效果',
     updateDownloading: '下载中',
@@ -232,6 +233,7 @@ const copy = {
     checkUpdates: 'Check for updates',
     upToDate: 'Up to date',
     installUpdate: 'Install update',
+    healthReminder: 'Health note: if you notice any flickering or discomfort, turn the effects off immediately and rest',
     effectsOffWarning: 'Effects are off: the mask is inactive. Use the button to turn them on',
     enableEffects: 'Turn on effects',
     updateDownloading: 'Downloading',
@@ -309,6 +311,7 @@ const copy = {
     checkUpdates: '更新を確認',
     upToDate: '最新です',
     installUpdate: '更新をインストール',
+    healthReminder: '健康に関する注意：ちらつきや不快感を感じたら、すぐに効果をオフにして休憩してください',
     effectsOffWarning: '効果がオフ：マスクが無効です。右のボタンでオンにできます',
     enableEffects: '効果をオン',
     updateDownloading: 'ダウンロード中',
@@ -386,6 +389,7 @@ const copy = {
     checkUpdates: '업데이트 확인',
     upToDate: '최신 버전입니다',
     installUpdate: '업데이트 설치',
+    healthReminder: '건강 알림: 깜빡임이나 불편함을 느끼면 즉시 효과를 끄고 휴식하세요',
     effectsOffWarning: '효과 꺼짐: 마스크가 비활성입니다. 오른쪽 버튼으로 켤 수 있습니다',
     enableEffects: '효과 켜기',
     updateDownloading: '다운로드 중',
@@ -463,6 +467,7 @@ const copy = {
     checkUpdates: 'Nach Updates suchen',
     upToDate: 'Aktuell',
     installUpdate: 'Update installieren',
+    healthReminder: 'Hinweis: Bei Flackern oder Unwohlsein sofort die Effekte deaktivieren und pausieren',
     effectsOffWarning: 'Effekte aus: Die Maske ist inaktiv. Über die Schaltfläche einschalten',
     enableEffects: 'Effekte einschalten',
     updateDownloading: 'Wird geladen',
@@ -540,6 +545,7 @@ const copy = {
     checkUpdates: 'Rechercher des mises à jour',
     upToDate: 'À jour',
     installUpdate: 'Installer la mise à jour',
+    healthReminder: 'Note santé : en cas de scintillement ou de gêne, désactivez immédiatement les effets et reposez-vous',
     effectsOffWarning: 'Effets désactivés : le masque est inactif. Activez-les via le bouton',
     enableEffects: 'Activer les effets',
     updateDownloading: 'Téléchargement',
@@ -617,6 +623,7 @@ const copy = {
     checkUpdates: 'Buscar actualizaciones',
     upToDate: 'Actualizado',
     installUpdate: 'Instalar actualización',
+    healthReminder: 'Aviso de salud: ante parpadeos o molestias, desactive los efectos de inmediato y descanse',
     effectsOffWarning: 'Efectos desactivados: la máscara está inactiva. Actívelos con el botón',
     enableEffects: 'Activar efectos',
     updateDownloading: 'Descargando',
@@ -1282,6 +1289,12 @@ function GpuStatusPanel({
   // 渲染器在跑但效果总开关关闭：给出显眼警告 + 一键开启。
   const effectsInactive =
     (status.gpuRendererRunning || status.nativeBlurRunning) && !status.effectsEnabled
+  const healthReminder = (
+    <div className='statusWarning health'>
+      <span>{labels.healthReminder}</span>
+    </div>
+  )
+
   const warning = effectsInactive ? (
     <div className="statusWarning">
       <span>{labels.effectsOffWarning}</span>
@@ -1298,6 +1311,7 @@ function GpuStatusPanel({
           <Gauge size={18} />
           <span>{labels.renderer}</span>
         </div>
+        {healthReminder}
         {warning}
         <dl>
           <div>
@@ -1450,10 +1464,6 @@ function GpuStatusPanel({
         <div>
           <dt>{labels.canvasFps}</dt>
           <dd>{status.canvasFps > 0 ? status.canvasFps : '-'}</dd>
-        </div>
-        <div>
-          <dt>{labels.passthroughFrames}</dt>
-          <dd>{status.gpuRendererFramesPresented}</dd>
         </div>
         <div>
           <dt>{labels.passthroughSize}</dt>
