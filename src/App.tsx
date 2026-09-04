@@ -73,6 +73,7 @@ type GpuPrototypeStatus = {
   gpuRendererLastError: string | null
   gpuRendererParams: string | null
   effectsEnabled: boolean
+  canvasFps: number
   nativeBlurRunning: boolean
   gpuCapturePipeline: string
   rendererBackend: string
@@ -199,6 +200,7 @@ const copy = {
     gpuPassthroughStop: '停止直通',
     passthroughBusy: '切换中…',
     passthroughStatus: '直通运行',
+    canvasFps: 'Canvas 帧率',
     passthroughFps: '直通 FPS',
     passthroughFrames: '累计帧数',
     passthroughParams: '直通参数',
@@ -275,6 +277,7 @@ const copy = {
     gpuPassthroughStop: 'Stop passthrough',
     passthroughBusy: 'Switching…',
     passthroughStatus: 'Passthrough',
+    canvasFps: 'Canvas FPS',
     passthroughFps: 'Passthrough FPS',
     passthroughFrames: 'Frames total',
     passthroughParams: 'Applied params',
@@ -351,6 +354,7 @@ const copy = {
     gpuPassthroughStop: 'パススルー停止',
     passthroughBusy: '切替中…',
     passthroughStatus: 'パススルー状態',
+    canvasFps: 'Canvas FPS',
     passthroughFps: 'パススルー FPS',
     passthroughFrames: '累計フレーム数',
     passthroughSize: 'キャプチャサイズ',
@@ -427,6 +431,7 @@ const copy = {
     gpuPassthroughStop: '패스스루 중지',
     passthroughBusy: '전환 중…',
     passthroughStatus: '패스스루 상태',
+    canvasFps: 'Canvas FPS',
     passthroughFps: '패스스루 FPS',
     passthroughFrames: '누적 프레임 수',
     passthroughSize: '캡처 크기',
@@ -503,6 +508,7 @@ const copy = {
     gpuPassthroughStop: 'Durchlauf stoppen',
     passthroughBusy: 'Wechseln…',
     passthroughStatus: 'Durchlauf',
+    canvasFps: 'Canvas-FPS',
     passthroughFps: 'Durchlauf-FPS',
     passthroughFrames: 'Frames gesamt',
     passthroughSize: 'Aufnahmegröße',
@@ -579,6 +585,7 @@ const copy = {
     gpuPassthroughStop: 'Arrêter la transparence',
     passthroughBusy: 'Basculer…',
     passthroughStatus: 'Transparence',
+    canvasFps: 'FPS Canvas',
     passthroughFps: 'FPS transparence',
     passthroughFrames: 'Images cumulées',
     passthroughSize: 'Taille de capture',
@@ -655,6 +662,7 @@ const copy = {
     gpuPassthroughStop: 'Detener modo directo',
     passthroughBusy: 'Cambiando…',
     passthroughStatus: 'Modo directo',
+    canvasFps: 'FPS Canvas',
     passthroughFps: 'FPS modo directo',
     passthroughFrames: 'Fotogramas totales',
     passthroughSize: 'Tamaño de captura',
@@ -877,6 +885,7 @@ function ControlPanel() {
               gpuRendererLastError: null,
               gpuRendererParams: null,
               effectsEnabled: false,
+              canvasFps: 0,
               nativeBlurRunning: false,
               gpuCapturePipeline: t.browserPipeline,
               rendererBackend: t.canvasFallback,
@@ -1439,6 +1448,10 @@ function GpuStatusPanel({
           <dd>{status.gpuRendererRunning ? status.gpuRendererFps : '-'}</dd>
         </div>
         <div>
+          <dt>{labels.canvasFps}</dt>
+          <dd>{status.canvasFps > 0 ? status.canvasFps : '-'}</dd>
+        </div>
+        <div>
           <dt>{labels.passthroughFrames}</dt>
           <dd>{status.gpuRendererFramesPresented}</dd>
         </div>
@@ -1644,6 +1657,9 @@ function FocusOverlay() {
       lastRaw: { ...cursor.current },
       lastTime: performance.now(),
     }
+    // Canvas 层 rAF 帧率统计：每秒上报一次给状态面板（对比直通 FPS 用）。
+    let fps_frames = 0
+    let fps_window = performance.now()
 
     const draw = () => {
       const { width, height } = canvas.getBoundingClientRect()
@@ -1749,6 +1765,13 @@ function FocusOverlay() {
         }
 
         context.restore()
+      }
+
+      fps_frames += 1
+      if (now - fps_window >= 1000) {
+        invoke('report_canvas_fps', { fps: fps_frames }).catch(() => undefined)
+        fps_frames = 0
+        fps_window = now
       }
 
       frame = requestAnimationFrame(draw)

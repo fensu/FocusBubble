@@ -139,11 +139,17 @@ pub fn update_comfort(
     let dy = raw_mouse[1] - comfort.last_raw_mouse[1];
     let speed = (dx * dx + dy * dy).sqrt() / dt;
 
+    // 帧率无关化：调用频率随渲染节奏变化（忙时 ~60Hz、闲时 4ms 轮询），
+    // 所有指数平滑按 dt 换算到 60fps 基准，否则遮罩收敛速度忽快忽慢，
+    // 表现为顿挫。
+    let frames = (dt * 60.0).clamp(0.25, 4.0);
+    let ease_alpha = 1.0 - (1.0f32 - 0.08).powf(frames);
+
     // 第一层平滑：速度 EMA，抬升/回落都温和，避免单帧噪声直通。
     let speed_alpha = if speed > comfort.smoothed_speed {
-        0.12
+        1.0 - (1.0f32 - 0.12).powf(frames)
     } else {
-        0.045
+        1.0 - (1.0f32 - 0.045).powf(frames)
     };
     comfort.smoothed_speed += (speed - comfort.smoothed_speed) * speed_alpha;
     comfort.last_raw_mouse = raw_mouse;
@@ -151,15 +157,21 @@ pub fn update_comfort(
     // 第二层平滑：ease 因子低通，半径/羽化的变化本身也要缓。
     let t = (comfort.smoothed_speed / 4000.0).clamp(0.0, 1.0);
     let target_ease = t * t * (3.0 - 2.0 * t);
-    comfort.ease += (target_ease - comfort.ease) * 0.08;
+    comfort.ease += (target_ease - comfort.ease) * ease_alpha;
     let ease = comfort.ease;
 
     // 低通跟随：速度越高跟随越慢（清晰区追着鼠标走）。
     let tracking = raw_params.tracking_alpha * (1.0 - 0.6 * ease);
     let (alpha_x, alpha_y) = if raw_params.mode >= 1 {
-        (tracking, tracking * 0.5)
+        (
+            1.0 - (1.0f32 - tracking).powf(frames),
+            1.0 - (1.0f32 - tracking * 0.5).powf(frames),
+        )
     } else {
-        (tracking, tracking)
+        (
+            1.0 - (1.0f32 - tracking).powf(frames),
+            1.0 - (1.0f32 - tracking).powf(frames),
+        )
     };
     comfort.smoothed_mouse[0] +=
         (raw_mouse[0] - comfort.smoothed_mouse[0]) * alpha_x.clamp(0.0, 1.0);

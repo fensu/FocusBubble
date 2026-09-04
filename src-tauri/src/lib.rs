@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -40,6 +40,8 @@ struct AppState {
     capture_texture_size: Mutex<Option<String>>,
     captured_frame_copied_to_swapchain: AtomicBool,
     gpu_renderer_params: Arc<Mutex<renderer::GpuRendererParams>>,
+    /// Canvas 层（overlay WebView rAF）每秒帧率，由前端上报。
+    canvas_fps: AtomicU64,
     #[cfg(target_os = "windows")]
     gpu_renderer: Mutex<Option<platform::windows::GpuRenderer>>,
     /// 关闭主窗口时：true = 隐藏到托盘，false = 直接退出进程。
@@ -78,6 +80,8 @@ struct GpuPrototypeStatus {
     /// 效果总开关当前值（来自共享参数，直通/原生模糊运行时若为 false
     /// 前端显示"遮罩未生效"警告）。
     effects_enabled: bool,
+    /// Canvas 层（overlay WebView rAF）每秒帧率，由前端上报。
+    canvas_fps: u64,
     native_blur_running: bool,
     gpu_capture_pipeline: &'static str,
     renderer_backend: &'static str,
@@ -120,6 +124,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
     let captured_frame_copied_to_swapchain = state
         .captured_frame_copied_to_swapchain
         .load(Ordering::Relaxed);
+    let canvas_fps = state.canvas_fps.load(Ordering::Relaxed);
     let effects_enabled = state
         .gpu_renderer_params
         .lock()
@@ -183,6 +188,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_last_error: status.gpu_renderer_last_error,
             gpu_renderer_params: status.gpu_renderer_params,
             effects_enabled,
+            canvas_fps,
             native_blur_running: false,
             gpu_capture_pipeline: status.gpu_capture_pipeline,
             renderer_backend: status.renderer_backend,
@@ -234,6 +240,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_last_error: None,
             gpu_renderer_params: None,
             effects_enabled,
+            canvas_fps,
             native_blur_running,
             gpu_capture_pipeline: "native per-platform renderer",
             renderer_backend: backend,
@@ -295,6 +302,12 @@ fn gpu_renderer_start(
         let _ = (app, state);
         Err("GPU renderer is only available on Windows".to_string())
     }
+}
+
+#[tauri::command]
+fn report_canvas_fps(state: State<'_, AppState>, fps: u64) -> Result<(), String> {
+    state.canvas_fps.store(fps, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -591,6 +604,7 @@ pub fn run() {
             capture_texture_size: Mutex::new(None),
             captured_frame_copied_to_swapchain: AtomicBool::new(false),
             gpu_renderer_params: Arc::new(Mutex::new(renderer::GpuRendererParams::default())),
+            canvas_fps: AtomicU64::new(0),
             #[cfg(target_os = "windows")]
             gpu_renderer: Mutex::new(None),
             close_to_tray: AtomicBool::new(true),
@@ -600,6 +614,7 @@ pub fn run() {
             gpu_prototype_status,
             gpu_renderer_start,
             gpu_renderer_stop,
+            report_canvas_fps,
             gpu_renderer_set_params,
             set_close_behavior,
             gpu_renderer_debug_params
@@ -801,19 +816,7 @@ pub fn run() {
                     }
                 }
 
-                // GPU 探测全部通过则自动启动直通：画面由 DComp 全程承载，
-                // WebView 隐藏（规避 Win10 透明 WebView 的顶部残留条），
-                // 用户不再需要手动点「启动直通」。
-                let state = app.state::<AppState>();
-                if state.d3d11_device_available.load(Ordering::Relaxed)
-                    && state
-                        .windows_graphics_capture_supported
-                        .load(Ordering::Relaxed)
-                {
-                    if let Err(error) = ensure_gpu_renderer(app.handle()) {
-                        eprintln!("GPU renderer autostart failed (canvas fallback): {error}");
-                    }
-                }
+                // 规则：禁止启动即默认开启任何渲染/效果；直通由用户手动启动。
             }
 
             let handle = app.handle().clone();
