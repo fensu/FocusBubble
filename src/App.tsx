@@ -1744,39 +1744,42 @@ function FocusOverlay() {
           const cx = current.x + settings.offsetX
           const cy = current.y + settings.offsetY
           context.save()
-          // destination-out 的挖洞力度取决于绘制内容 alpha；必须显式设为
-          // 全不透明，否则复用暗化层的半透明色导致带内残留暗度（偏暗 bug）。
+          // 与 macOS mask / Windows shader 完全一致的矩形 smoothstep 羽化：
+          // 逐圈累积挖洞（destination-out 累积 = 1-Π(1-α)），过渡几何与
+          // 模糊层对齐——之前用 blur 滤镜近似导致两层轮廓错位，出现
+          // 明显的亮暗边界线。
+          const rings = 12
+          const targetAt = (j: number) => {
+            const t = j / rings
+            const s = t * t * (3 - 2 * t)
+            return 0.995 * (1 - s) + 0.02 * s
+          }
+          const alphas: number[] = new Array(rings + 1).fill(0)
+          let survivalBelow = 1
+          for (let j = rings; j >= 1; j--) {
+            const survivalAtJ = 1 - targetAt(j)
+            alphas[j] = Math.min(0.9, Math.max(0, 1 - survivalAtJ / survivalBelow))
+            survivalBelow *= 1 - alphas[j]
+          }
+          const traceRoundRect = (grow: number) => {
+            const w = bandWidth + grow * 2
+            const h = bandHeight + grow * 2
+            context.beginPath()
+            if (typeof context.roundRect === 'function') {
+              context.roundRect(cx - w / 2, cy - h / 2, w, h, h / 2)
+            } else {
+              context.rect(cx - w / 2, cy - h / 2, w, h)
+            }
+          }
+          for (let j = 1; j <= rings; j++) {
+            if (alphas[j] <= 0) continue
+            context.fillStyle = `rgba(0, 0, 0, ${alphas[j]})`
+            traceRoundRect((effectiveFeather * j) / rings)
+            context.fill()
+          }
+          // 清晰区内部补一次全量挖洞（残留 <1.5%，补齐到 100%）。
           context.fillStyle = 'rgba(0, 0, 0, 1)'
-          // 圆角矩形 + 滤镜模糊近似羽化边缘
-          context.filter = `blur(${Math.max(1, effectiveFeather * 0.4)}px)`
-          context.beginPath()
-          if (typeof context.roundRect === 'function') {
-            context.roundRect(cx - bandWidth / 2, cy - bandHeight / 2, bandWidth, bandHeight, bandHeight / 2)
-          } else {
-            context.rect(cx - bandWidth / 2, cy - bandHeight / 2, bandWidth, bandHeight)
-          }
-          context.fill()
-          // ctx.filter 在部分 WebKit 上可能无效，导致横带内部挖洞不完全、
-          // 整体偏暗；内缩一圈再实心补一次，保证带内彻底清晰。
-          context.filter = 'none'
-          const inset = Math.max(2, effectiveFeather * 0.4)
-          context.beginPath()
-          if (typeof context.roundRect === 'function') {
-            context.roundRect(
-              cx - bandWidth / 2 + inset,
-              cy - bandHeight / 2 + inset,
-              Math.max(1, bandWidth - inset * 2),
-              Math.max(1, bandHeight - inset * 2),
-              Math.max(1, bandHeight / 2 - inset),
-            )
-          } else {
-            context.rect(
-              cx - bandWidth / 2 + inset,
-              cy - bandHeight / 2 + inset,
-              Math.max(1, bandWidth - inset * 2),
-              Math.max(1, bandHeight - inset * 2),
-            )
-          }
+          traceRoundRect(0)
           context.fill()
           context.restore()
         }
