@@ -39,6 +39,7 @@ type FocusSettings = {
   spotlightScaleX: number
   spotlightScaleY: number
   closeToTray: boolean
+  warningAcknowledged: boolean
 }
 
 type CursorPoint = {
@@ -85,8 +86,10 @@ const storageKey = `focus-bubble-settings-${platformSuffix}`
 const channelName = `focus-bubble-settings-${platformSuffix}`
 
 // 视觉舒适度默认值：外围暗度温和（20–35% 区间）、宽羽化、慢跟随。
+// 首次使用不默认开启效果：确认健康提示后由用户手动开启。
 const defaultSettings: FocusSettings = {
-  enabled: true,
+  enabled: false,
+  warningAcknowledged: false,
   mode: 'spotlight',
   language: 'zh-CN',
   radius: 250,
@@ -133,6 +136,9 @@ const strongFocusPreset: Partial<FocusSettings> = IS_MAC
 const copy = {
   'zh-CN': {
     running: '运行中',
+    healthTitle: '健康与安全提示',
+    healthBody: '本软件会持续改变屏幕的亮度与清晰度分布。使用过程中如出现频闪、眼痛、头痛、眩晕或视觉异常，请立即关闭本软件并休息。有光敏性癫痫、偏头痛病史或眼部疾病者，请在使用前咨询医生。',
+    healthAck: '我已了解，开始使用',
     maskOn: '效果开启',
     maskOff: '效果关闭',
     paused: '已暂停',
@@ -206,6 +212,9 @@ const copy = {
   },
   'en-US': {
     running: 'Running',
+    healthTitle: 'Health & Safety Notice',
+    healthBody: 'This app continuously changes screen brightness and clarity. If you experience flickering, eye pain, headache, dizziness, or visual disturbances while using it, close the app immediately and rest. Consult a doctor before use if you have a history of photosensitive epilepsy, migraine, or eye conditions.',
+    healthAck: 'I understand, start',
     maskOn: 'Effects on',
     maskOff: 'Effects off',
     paused: 'Paused',
@@ -279,6 +288,9 @@ const copy = {
   },
   'ja-JP': {
     running: '実行中',
+    healthTitle: '健康と安全に関するお知らせ',
+    healthBody: '本ソフトは画面の明るさと明瞭さの分布を継続的に変化させます。使用中にちらつき、目の痛み、頭痛、めまい、視覚異常が生じた場合はすぐに使用を中止し休憩してください。光感受性てんかん・偏頭痛・目の疾患の既往がある方は使用前に医師へ相談してください。',
+    healthAck: '了解しました',
     maskOn: '効果オン',
     maskOff: '効果オフ',
     paused: '一時停止',
@@ -352,6 +364,9 @@ const copy = {
   },
   'ko-KR': {
     running: '실행 중',
+    healthTitle: '건강 및 안전 알림',
+    healthBody: '이 앱은 화면 밝기와 선명도 분포를 지속적으로 변화시킵니다. 사용 중 깜빡임, 눈의 통증, 두통, 어지러움, 시각 이상이 나타나면 즉시 앱을 종료하고 휴식하십시오. 광과민성 간질, 편두통, 안과 질환 병력이 있다면 사용 전 의사와 상담하십시오.',
+    healthAck: '확인했습니다',
     maskOn: '효과 켬',
     maskOff: '효과 끔',
     paused: '일시정지',
@@ -425,6 +440,9 @@ const copy = {
   },
   'de-DE': {
     running: 'Aktiv',
+    healthTitle: 'Hinweis zu Gesundheit und Sicherheit',
+    healthBody: 'Diese App verändert die Helligkeits- und Schärfeverteilung des Bildschirms laufend. Treten bei der Nutzung Flackern, Augenschmerzen, Kopfschmerzen, Schwindel oder Sehstörungen auf, beenden Sie die App sofort und pausieren Sie. Bei bekannter photosensitiver Epilepsie, Migräne oder Augenerkrankungen vorher ärztlichen Rat einholen.',
+    healthAck: 'Verstanden',
     maskOn: 'Effekte an',
     maskOff: 'Effekte aus',
     paused: 'Pausiert',
@@ -498,6 +516,9 @@ const copy = {
   },
   'fr-FR': {
     running: 'Actif',
+    healthTitle: 'Avis santé et sécurité',
+    healthBody: 'Cette application modifie en continu la répartition de la luminosité et de la netteté de l’écran. En cas de scintillement, de douleur oculaire, de maux de tête, de vertiges ou de troubles visuels, fermez immédiatement l’application et reposez-vous. En cas d’épilepsie photosensible, de migraines ou de troubles oculaires connus, consultez un médecin avant utilisation.',
+    healthAck: 'J’ai compris',
     maskOn: 'Effets activés',
     maskOff: 'Effets désactivés',
     paused: 'En pause',
@@ -571,6 +592,9 @@ const copy = {
   },
   'es-ES': {
     running: 'Activo',
+    healthTitle: 'Aviso de salud y seguridad',
+    healthBody: 'Esta aplicación modifica de forma continua el brillo y la nitidez de la pantalla. Si percibes parpadeos, dolor ocular, dolor de cabeza, mareos o alteraciones visuales, cierra la aplicación de inmediato y descansa. Si tienes antecedentes de epilepsia fotosensible, migraña o afecciones oculares, consulta a un médico antes de usarla.',
+    healthAck: 'Entendido',
     maskOn: 'Efectos activados',
     maskOff: 'Efectos desactivados',
     paused: 'En pausa',
@@ -931,6 +955,22 @@ function ControlPanel() {
 
   return (
     <main className="shell">
+      {!settings.warningAcknowledged && (
+        <div className="healthNotice">
+          <div className="healthCard">
+            <h2>{t.healthTitle}</h2>
+            <p>{t.healthBody}</p>
+            <button
+              type="button"
+              onClick={() =>
+                setSettings((current) => ({ ...current, warningAcknowledged: true }))
+              }
+            >
+              {t.healthAck}
+            </button>
+          </div>
+        </div>
+      )}
       <section className="workbench" aria-label="Focus Bubble">
         <header className="topbar">
           <p className="eyebrow">Focus Bubble</p>

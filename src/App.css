@@ -526,3 +526,53 @@ select:focus-visible {
 .statusWarning button:hover {
   background: #f0d89c;
 }
+
+.healthNotice {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 30, 27, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.healthCard {
+  width: min(520px, calc(100vw - 48px));
+  padding: 26px 28px;
+  border: 1px solid #e3c98a;
+  border-radius: 12px;
+  background: #fffdf5;
+  box-shadow: 0 24px 70px rgba(30, 41, 38, 0.35);
+  display: grid;
+  gap: 14px;
+}
+
+.healthCard h2 {
+  margin: 0;
+  color: #7a5d1f;
+  font-size: 17px;
+}
+
+.healthCard p {
+  margin: 0;
+  color: #43503f;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.healthCard button {
+  justify-self: center;
+  min-width: 180px;
+  height: 38px;
+  border: 1px solid #c9a24b;
+  border-radius: 9px;
+  background: #f5e3bb;
+  color: #5d4715;
+  font: 650 14px/1 var(--sans);
+  cursor: pointer;
+}
+
+.healthCard button:hover {
+  background: #f0d89c;
+}
