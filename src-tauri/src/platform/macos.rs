@@ -77,7 +77,7 @@ pub fn start_mac_blur(app: &tauri::AppHandle, params: Arc<Mutex<GpuRendererParam
         match view.viewWithTag(BLUR_VIEW_TAG) {
             Some(found) => {
                 let effect = found
-                    .cast::<NSVisualEffectView>()
+                    .downcast::<NSVisualEffectView>()
                     .expect("tagged view is an NSVisualEffectView");
                 effect.as_ref() as *const NSVisualEffectView as usize
             }
