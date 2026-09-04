@@ -142,17 +142,34 @@ transparent NSWindow
 
 `NSVisualEffectView` 的 `behindWindow` 模式由系统 compositor 使用窗口后方内容做混合和模糊。相比持续截屏，这条路径更符合 macOS 平台能力，值得优先实验。
 
-**已实现（v0.3.0，`platform/macos.rs`）**：`window-vibrancy` 在 overlay 挂 UnderWindowBackground effect view；更新线程 30fps 用与 Windows shader 相同的距离模型渲染 160x90 灰度 mask（黑=清晰区，白=模糊），经 `run_on_main_thread` 生成 NSImage 并 `setMaskImage`。mask 经手写 PNG 编码器（`platform/mask_png.rs`，无图像库依赖，字节已用 Node zlib 外部校验）。变暗仍由 Canvas overlay 负责。blur 滑块在 macOS 上为开关语义（>=1 启用系统模糊）；模糊强度由 material 决定。待验证项：
+### macOS 已实现与踩坑记录（v0.3.x，`platform/macos.rs`）
 
-- `NSVisualEffectView` 的 `maskImage` 高频更新性能与视觉平滑度。
-- 透明窗口 + vibrancy + WebView 三层叠加在多显示器/不同 appearance 下的表现。
+**当前实现**：
 
-macOS prototype 要验证：
+- `window-vibrancy` 在 overlay 挂 behindWindow 的 NSVisualEffectView（material=Sidebar，取其最接近纯毛玻璃的浅色调；变暗由 Canvas 层负责，两层叠加）。
+- 更新线程 60fps：tao `cursor_position`（已修正 Retina Y 单位 bug）→ 共享舒适度层 `renderer::update_comfort`（与 Windows shader / Canvas 同一套呼吸参数）→ 160x90 RGBA mask（**alpha 通道携带 mask 值**，SDK 文档明确 alpha 通道作掩码；纯灰度图处处 alpha=1 等于全糊）→ 手写 PNG 编码器（`platform/mask_png.rs`，Node zlib 外部校验过字节）→ `run_on_main_thread` 中 `setSize(view.bounds)` + **`setCapInsets(1,1,1,1)`** + `setMaskImage`。
+- 每秒一条 `[mac-blur]` 诊断日志（本地鼠标/屏幕/缩放/生效参数/mask 采样）。
 
-- 透明全屏 `NSWindow` + 鼠标穿透是否稳定。
-- `NSVisualEffectView` 的 `maskImage` 是否能高频跟随鼠标更新。
-- `behindWindow` 对多显示器、Mission Control、全屏空间的表现。
-- 是否需要屏幕录制权限。如果使用系统 behindWindow blur，理论上可能不需要持续截屏。
+**踩坑记录（按发现顺序）**：
+
+1. 原生 `fullscreen(true)` 在 macOS 是切 Space 接管屏幕 → 黑屏。改为无边框窗口铺屏。
+2. `device_query` 需要辅助功能权限（弹窗还被 overlay 挡住）→ 换 tao `cursor_position`（NSEvent 被动查询，免权限）。
+3. objc2-app-kit 新版 `NSScreen::mainScreen` 要求 MainThreadMarker、`Retained` 类转换是 `downcast` 不是 `cast` —— CI 编译炸两次。教训：macOS 专用 API 必须逐个从 crate 源码核对签名。
+4. tao `cursor_position` 的 Retina bug：`物理高度 − 逻辑y` 后又乘 scale，y 飞出屏幕 → mask 圆心永远在屏幕外 → 全屏模糊。修正：y 除回 scale。
+5. mask 图像不做垂直翻转（实测 maskImage 按图像正立渲染，翻转反而镜像）。
+6. **mask 图像默认不平铺拉伸**：SDK 文档要求 "properly set capInsets to stretch"。不设置 capInsets 时小图按原始尺寸平铺——用户看到的"一块块清晰小区域"就是 12x12 平铺；必须 `setCapInsets`。
+7. UnderWindowBackground 材质自带灰调（"灰蒙蒙"感）→ 换 Sidebar 材质。
+
+**几何测试模式**：`FOCUS_BUBBLE_MASK_INVERT=1 npm run desktop:dev` 启动时反转 mask（圆内模糊、圆外清晰），直接观察 mask 认为的圆在哪里，用于校准映射。
+
+**待验证 / 后续路线**：
+
+- capInsets 拉伸后 mask 几何是否精确对位（用反转模式验收）。
+- NSVisualEffectView 的固有局限：模糊强度不可调（material 固定）、带色调。若要 Windows 级的渐变模糊，候选路线：
+  - a) CALayer `backgroundFilters` + CIGaussianBlur（半径可调，但 10.14+ 系统对 backgroundFilters 支持不稳，需实测）；
+  - b) ScreenCaptureKit（SCStream）捕获排除自身窗口的桌面 + Metal shader 模糊（最接近 Windows WGC 管线，工程量大，macOS 12.3+）；
+  - c) 接受 vibrancy 现状，把精力放回 Windows 主线。
+- 多显示器目前按主显示器处理（阶段 E）。
 
 ## 6. Linux 策略
 

@@ -18,7 +18,7 @@ use std::{
 };
 
 use objc2_app_kit::{NSImage, NSView, NSVisualEffectView};
-use objc2_foundation::{MainThreadMarker, NSData};
+use objc2_foundation::{MainThreadMarker, NSData, NSEdgeInsets};
 use tauri::Manager;
 
 use super::mask_png::encode_mask_png;
@@ -63,11 +63,11 @@ pub fn start_mac_blur(app: &tauri::AppHandle, params: Arc<Mutex<GpuRendererParam
         return;
     };
 
-    // UnderWindowBackground：中性模糊，专为窗口后方内容设计；
-    // 外围变暗仍由 Canvas overlay 负责，这里只贡献模糊。
+    // UnderWindowBackground 自带灰调底色（"灰蒙蒙"的来源之一）；
+    // Sidebar 是最接近"纯毛玻璃"的浅色材质，变暗仍由 Canvas 层负责。
     let applied = window_vibrancy::apply_vibrancy(
         &overlay,
-        window_vibrancy::NSVisualEffectMaterial::UnderWindowBackground,
+        window_vibrancy::NSVisualEffectMaterial::Sidebar,
         Some(window_vibrancy::NSVisualEffectState::Active),
         None,
     );
@@ -119,6 +119,9 @@ fn mask_update_loop(
     let mut comfort = crate::renderer::ComfortState::new();
     let mut comfort_tick = std::time::Instant::now();
     let mut diagnostic_tick = std::time::Instant::now();
+    // 几何测试模式：FOCUS_BUBBLE_MASK_INVERT=1 时反转 mask（圆内模糊、圆外清晰），
+    // 用于直接观察 mask 认为的"圆"到底在哪。正常模式恒为 false。
+    let invert_mask = std::env::var("FOCUS_BUBBLE_MASK_INVERT").ok().as_deref() == Some("1");
 
     loop {
         thread::sleep(Duration::from_millis(16));
@@ -148,12 +151,17 @@ fn mask_update_loop(
         let (smoothed_mouse, effective_params) =
             crate::renderer::update_comfort(&raw_params, raw_mouse, &mut comfort, dt);
 
-        let pixels = render_mask_pixels(
+        let mut pixels = render_mask_pixels(
             &effective_params,
             smoothed_mouse,
             size.width as f32,
             size.height as f32,
         );
+        if invert_mask {
+            for value in pixels.iter_mut() {
+                *value = 255 - *value;
+            }
+        }
 
         // 每秒一条诊断：本地鼠标、屏幕物理尺寸、缩放比、生效参数与 mask 采样，
         // 排查坐标/参数链路问题直接看这行。
@@ -191,8 +199,15 @@ fn mask_update_loop(
             let data = NSData::with_bytes(png.as_slice());
             let allocated = mtm.alloc::<NSImage>();
             if let Some(image) = NSImage::initWithData(allocated, &data) {
-                // 图像 point 尺寸与视图 bounds 对齐，消除缩放映射歧义。
                 image.setSize(view.bounds().size);
+                // SDK 文档要求用 capInsets 声明拉伸；不设置时小图会按原始
+                // 尺寸平铺（表现为屏幕上出现一块块重复的清晰区域）。
+                image.setCapInsets(NSEdgeInsets {
+                    top: 1.0,
+                    left: 1.0,
+                    bottom: 1.0,
+                    right: 1.0,
+                });
                 view.setMaskImage(Some(&image));
             }
         });
@@ -203,12 +218,10 @@ fn mask_update_loop(
 }
 
 /// 与 Windows shader 相同的距离模型：黑色（0）= 清晰区，白色（255）= 模糊。
-/// 实测校准偏移（top-left 原点，单位：屏幕宽度/高度的比例）。
-/// 观察现象：清晰区出现在绘制坐标的右上方向约半屏处，绘制时反向平移。
-/// 若清晰区随鼠标平移而不是固定偏移，说明映射是缩放/镜像问题，
-/// 需改映射策略而不是调偏移。
-const MASK_OFFSET_X: f32 = -0.5;
-const MASK_OFFSET_Y: f32 = 0.5;
+/// mask 绘制中心的额外偏移（top-left 原点，屏幕宽高比例）。capInsets 拉伸
+/// 修复映射后应保持 0；仅在实际仍存在固定偏移时用于校准。
+const MASK_OFFSET_X: f32 = 0.0;
+const MASK_OFFSET_Y: f32 = 0.0;
 
 fn render_mask_pixels(
     params: &GpuRendererParams,
