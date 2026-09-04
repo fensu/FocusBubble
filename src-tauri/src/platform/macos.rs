@@ -155,18 +155,20 @@ fn mask_update_loop(
             size.height as f32,
         );
 
-        // 每秒一条诊断：本地鼠标、屏幕物理尺寸、生效参数与 mask 采样，
+        // 每秒一条诊断：本地鼠标、屏幕物理尺寸、缩放比、生效参数与 mask 采样，
         // 排查坐标/参数链路问题直接看这行。
         if diagnostic_tick.elapsed() >= Duration::from_secs(1) {
             diagnostic_tick = std::time::Instant::now();
             let center = pixels[(MASK_HEIGHT / 2) * MASK_WIDTH + MASK_WIDTH / 2];
             let corner = pixels[0];
+            let scale = overlay.scale_factor().unwrap_or(1.0);
             eprintln!(
-                "[mac-blur] local_mouse={:.0},{:.0} screen={}x{} mode={} radius={:.0} feather={:.0} blur={:.0} band={:.0} enabled={} mask_center={} mask_corner={}",
+                "[mac-blur] local_mouse={:.0},{:.0} screen={}x{} scale={} mode={} radius={:.0} feather={:.0} blur={:.0} band={:.0} enabled={} mask_center={} mask_corner={}",
                 smoothed_mouse[0],
                 smoothed_mouse[1],
                 size.width,
                 size.height,
+                scale,
                 effective_params.mode,
                 effective_params.radius,
                 effective_params.feather,
@@ -201,6 +203,13 @@ fn mask_update_loop(
 }
 
 /// 与 Windows shader 相同的距离模型：黑色（0）= 清晰区，白色（255）= 模糊。
+/// 实测校准偏移（top-left 原点，单位：屏幕宽度/高度的比例）。
+/// 观察现象：清晰区出现在绘制坐标的右上方向约半屏处，绘制时反向平移。
+/// 若清晰区随鼠标平移而不是固定偏移，说明映射是缩放/镜像问题，
+/// 需改映射策略而不是调偏移。
+const MASK_OFFSET_X: f32 = -0.5;
+const MASK_OFFSET_Y: f32 = 0.5;
+
 fn render_mask_pixels(
     params: &GpuRendererParams,
     mouse: [f32; 2],
@@ -223,16 +232,21 @@ fn render_mask_pixels(
     let scale_x = params.spot_scale_x.max(0.1);
     let scale_y = params.spot_scale_y.max(0.1);
 
+    let center = [
+        mouse[0] + screen_width * MASK_OFFSET_X,
+        mouse[1] + screen_height * MASK_OFFSET_Y,
+    ];
+
     for y in 0..MASK_HEIGHT {
         let py = (y as f32 + 0.5) / MASK_HEIGHT as f32 * screen_height;
         for x in 0..MASK_WIDTH {
             let px = (x as f32 + 0.5) / MASK_WIDTH as f32 * screen_width;
             let dist = if is_spotlight {
-                let dx = (px - mouse[0]) / scale_x;
-                let dy = (py - mouse[1]) / scale_y;
+                let dx = (px - center[0]) / scale_x;
+                let dy = (py - center[1]) / scale_y;
                 (dx * dx + dy * dy).sqrt()
             } else {
-                (py - mouse[1]).abs()
+                (py - center[1]).abs()
             };
             let t = ((dist - edge) / feather).clamp(0.0, 1.0);
             let mask = t * t * (3.0 - 2.0 * t);
