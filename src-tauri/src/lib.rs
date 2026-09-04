@@ -75,6 +75,7 @@ struct GpuPrototypeStatus {
     gpu_renderer_capture_size: Option<String>,
     gpu_renderer_last_error: Option<String>,
     gpu_renderer_params: Option<String>,
+    native_blur_running: bool,
     gpu_capture_pipeline: &'static str,
     renderer_backend: &'static str,
 }
@@ -173,6 +174,7 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_capture_size: status.gpu_renderer_capture_size,
             gpu_renderer_last_error: status.gpu_renderer_last_error,
             gpu_renderer_params: status.gpu_renderer_params,
+            native_blur_running: false,
             gpu_capture_pipeline: status.gpu_capture_pipeline,
             renderer_backend: status.renderer_backend,
         }
@@ -180,8 +182,25 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
 
     #[cfg(not(target_os = "windows"))]
     {
+        let native_blur_running = {
+            #[cfg(target_os = "macos")]
+            {
+                platform::macos::mac_blur_running()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                false
+            }
+        };
+
+        let backend = if native_blur_running {
+            "macOS native blur (NSVisualEffectView mask) + Canvas dim"
+        } else {
+            "Canvas fallback"
+        };
+
         GpuPrototypeStatus {
-            platform: "non-windows",
+            platform: std::env::consts::OS,
             overlay_excluded_from_capture,
             d3d11_device_available,
             d3d11_feature_level,
@@ -205,8 +224,9 @@ fn gpu_prototype_status(state: State<'_, AppState>) -> GpuPrototypeStatus {
             gpu_renderer_capture_size: None,
             gpu_renderer_last_error: None,
             gpu_renderer_params: None,
-            gpu_capture_pipeline: "not available on this platform",
-            renderer_backend: "current: CanvasRenderer fallback",
+            native_blur_running,
+            gpu_capture_pipeline: "native per-platform renderer",
+            renderer_backend: backend,
         }
     }
 }

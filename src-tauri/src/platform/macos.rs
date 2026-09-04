@@ -98,11 +98,13 @@ fn mask_update_loop(
     params: Arc<Mutex<GpuRendererParams>>,
     effect_ptr: usize,
 ) {
-    let mut smoothed = [0.0f32; 2];
-    let mut has_position = false;
+    // 与 Windows shader / Canvas 同一套舒适度层：mask 的清晰区必须与
+    // Canvas 光圈一起"呼吸"，否则鼠标移动时模糊会吃进视觉清晰区。
+    let mut comfort = crate::renderer::ComfortState::new();
+    let mut comfort_tick = std::time::Instant::now();
 
     loop {
-        thread::sleep(Duration::from_millis(33));
+        thread::sleep(Duration::from_millis(16));
 
         let Some(overlay) = handle.get_webview_window("overlay") else {
             continue;
@@ -115,23 +117,27 @@ fn mask_update_loop(
             continue;
         };
 
-        let params = *params
+        let raw_params = *params
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // 全局物理坐标 -> overlay 本地物理坐标
-        let local_x = cursor.x - position.x as f64;
-        let local_y = cursor.y - position.y as f64;
+        let raw_mouse = [
+            (cursor.x - position.x as f64) as f32,
+            (cursor.y - position.y as f64) as f32,
+        ];
 
-        if !has_position {
-            smoothed = [local_x as f32, local_y as f32];
-            has_position = true;
-        }
-        let alpha = params.tracking_alpha.clamp(0.0, 1.0);
-        smoothed[0] += (local_x as f32 - smoothed[0]) * alpha;
-        smoothed[1] += (local_y as f32 - smoothed[1]) * alpha;
+        let dt = comfort_tick.elapsed().as_secs_f32();
+        comfort_tick = std::time::Instant::now();
+        let (smoothed_mouse, effective_params) =
+            crate::renderer::update_comfort(&raw_params, raw_mouse, &mut comfort, dt);
 
-        let pixels = render_mask_pixels(&params, smoothed, size.width as f32, size.height as f32);
+        let pixels = render_mask_pixels(
+            &effective_params,
+            smoothed_mouse,
+            size.width as f32,
+            size.height as f32,
+        );
         let png = encode_mask_png(MASK_WIDTH, MASK_HEIGHT, &pixels);
 
         let send = handle.clone();

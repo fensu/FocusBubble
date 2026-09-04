@@ -65,9 +65,17 @@ type GpuPrototypeStatus = {
   gpuRendererCaptureSize: string | null
   gpuRendererLastError: string | null
   gpuRendererParams: string | null
+  nativeBlurRunning: boolean
   gpuCapturePipeline: string
   rendererBackend: string
 }
+
+// 参数按平台分离存储与同步：Windows 调好的数值在 macOS 上的观感不同，
+// 两侧互不污染。
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
+const platformSuffix = IS_MAC ? 'macos' : 'windows'
+const storageKey = `focus-bubble-settings-${platformSuffix}`
+const channelName = `focus-bubble-settings-${platformSuffix}`
 
 // 视觉舒适度默认值：外围暗度温和（20–35% 区间）、宽羽化、慢跟随。
 const defaultSettings: FocusSettings = {
@@ -96,16 +104,22 @@ const lowMotionPreset: Partial<FocusSettings> = {
 }
 
 // 强聚焦模式：更明显的遮罩对比，适合高干扰环境短时使用。
-const strongFocusPreset: Partial<FocusSettings> = {
-  radius: 220,
-  feather: 120,
-  blur: 16,
-  opacity: 0.55,
-  smoothing: 0.22,
-}
-
-const storageKey = 'focus-bubble-settings'
-const channelName = 'focus-bubble-settings'
+// macOS 模糊强度由系统 material 决定，过强的暗度+模糊叠加会不可用，单独给温和值。
+const strongFocusPreset: Partial<FocusSettings> = IS_MAC
+  ? {
+      radius: 240,
+      feather: 220,
+      blur: 14,
+      opacity: 0.45,
+      smoothing: 0.2,
+    }
+  : {
+      radius: 220,
+      feather: 120,
+      blur: 16,
+      opacity: 0.55,
+      smoothing: 0.22,
+    }
 
 const copy = {
   'zh-CN': {
@@ -142,7 +156,8 @@ const copy = {
     smoothing: '跟随平滑',
     readingHeight: '阅读带高度',
     codeHeight: '代码行高度',
-    renderer: '渲染器',
+        renderer: '渲染器',
+    nativeBlur: '原生模糊',
     platform: '平台',
     captureExclusion: '排除自身捕获',
     d3d11Device: 'D3D11 设备',
@@ -210,7 +225,8 @@ const copy = {
     smoothing: 'Follow smoothing',
     readingHeight: 'Reading band',
     codeHeight: 'Code band',
-    renderer: 'Renderer',
+        renderer: 'Renderer',
+    nativeBlur: 'Native blur',
     platform: 'Platform',
     captureExclusion: 'Capture exclusion',
     d3d11Device: 'D3D11 device',
@@ -278,7 +294,8 @@ const copy = {
     smoothing: '追従の滑らかさ',
     readingHeight: 'リーディング帯の高さ',
     codeHeight: 'コード行の高さ',
-    renderer: 'レンダラー',
+        renderer: 'レンダラー',
+    nativeBlur: 'ネイティブぼかし',
     platform: 'プラットフォーム',
     captureExclusion: '自己キャプチャの除外',
     d3d11Device: 'D3D11 デバイス',
@@ -346,7 +363,8 @@ const copy = {
     smoothing: '부드러운 따라가기',
     readingHeight: '리딩 밴드 높이',
     codeHeight: '코드 행 높이',
-    renderer: '렌더러',
+        renderer: '렌더러',
+    nativeBlur: '네이티브 블러',
     platform: '플랫폼',
     captureExclusion: '자체 캡처 제외',
     d3d11Device: 'D3D11 디바이스',
@@ -415,6 +433,7 @@ const copy = {
     readingHeight: 'Leseband',
     codeHeight: 'Codezeile',
     renderer: 'Renderer',
+    nativeBlur: 'Natives Blur',
     platform: 'Plattform',
     captureExclusion: 'Eigenaufnahme ausschließen',
     d3d11Device: 'D3D11-Gerät',
@@ -482,7 +501,8 @@ const copy = {
     smoothing: 'Suivi lissé',
     readingHeight: 'Bandeau de lecture',
     codeHeight: 'Ligne de code',
-    renderer: 'Rendu',
+        renderer: 'Rendu',
+    nativeBlur: 'Flou natif',
     platform: 'Plateforme',
     captureExclusion: 'Exclusion de capture',
     d3d11Device: 'Périphérique D3D11',
@@ -550,7 +570,8 @@ const copy = {
     smoothing: 'Suavidad de seguimiento',
     readingHeight: 'Banda de lectura',
     codeHeight: 'Línea de código',
-    renderer: 'Renderizador',
+        renderer: 'Renderizador',
+    nativeBlur: 'Desenfoque nativo',
     platform: 'Plataforma',
     captureExclusion: 'Exclusión de captura',
     d3d11Device: 'Dispositivo D3D11',
@@ -776,6 +797,7 @@ function ControlPanel() {
               gpuRendererCaptureSize: null,
               gpuRendererLastError: null,
               gpuRendererParams: null,
+              nativeBlurRunning: false,
               gpuCapturePipeline: t.browserPipeline,
               rendererBackend: t.canvasFallback,
             })
@@ -1107,28 +1129,54 @@ function GpuStatusPanel({
   passthroughBusy: boolean
   onTogglePassthrough: () => void
 }) {
-  const isWindows = status.platform === 'windows'
+  // 非 Windows 只显示平台与原生渲染器状态；WGC/D3D 探测行仅对 Windows 有意义。
+  if (status.platform !== 'windows') {
+    return (
+      <section className="statusPanel" aria-label={labels.renderer}>
+        <div className="groupHeader">
+          <Gauge size={18} />
+          <span>{labels.renderer}</span>
+        </div>
+        <dl>
+          <div>
+            <dt>{labels.platform}</dt>
+            <dd>{status.platform}</dd>
+          </div>
+          {status.platform === 'macos' && (
+            <div>
+              <dt>{labels.nativeBlur}</dt>
+              <dd className={status.nativeBlurRunning ? 'good' : 'muted'}>
+                {status.nativeBlurRunning ? labels.enabledStatus : labels.disabledStatus}
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>Backend</dt>
+            <dd>{status.rendererBackend}</dd>
+          </div>
+        </dl>
+      </section>
+    )
+  }
 
   return (
     <section className="statusPanel" aria-label={labels.renderer}>
       <div className="groupHeader">
         <Gauge size={18} />
         <span>{labels.renderer}</span>
-        {isWindows && (
-          <button
-            type="button"
-            className={status.gpuRendererRunning ? 'power is-on' : 'power'}
-            disabled={passthroughBusy}
-            aria-pressed={status.gpuRendererRunning}
-            onClick={onTogglePassthrough}
-          >
-            {passthroughBusy
-              ? labels.passthroughBusy
-              : status.gpuRendererRunning
-                ? labels.gpuPassthroughStop
-                : labels.gpuPassthroughStart}
-          </button>
-        )}
+        <button
+          type="button"
+          className={status.gpuRendererRunning ? 'power is-on' : 'power'}
+          disabled={passthroughBusy}
+          aria-pressed={status.gpuRendererRunning}
+          onClick={onTogglePassthrough}
+        >
+          {passthroughBusy
+            ? labels.passthroughBusy
+            : status.gpuRendererRunning
+              ? labels.gpuPassthroughStop
+              : labels.gpuPassthroughStart}
+        </button>
       </div>
       <p className="passthroughHint">{labels.gpuPassthrough}</p>
       <dl>
