@@ -37,6 +37,22 @@ pub fn mac_blur_running() -> bool {
     MAC_BLUR_RUNNING.load(Ordering::Relaxed)
 }
 
+/// 修正 tao 0.35 cursor_position 在缩放显示器上的 Y 单位混用 bug：
+/// tao 计算 `物理高度 - 逻辑y` 后又整体乘 scale，Retina 下 y 超出屏幕
+/// 范围（光圈被画到屏幕外，表现为全屏模糊）。把 y 除回 scale 恰好还原
+/// 为正确的 top-left 物理 y；scale=1 时是 no-op。
+pub fn corrected_cursor_position(handle: &tauri::AppHandle) -> Option<(f64, f64)> {
+    let position = handle.cursor_position().ok()?;
+    let scale = handle
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| monitor.scale_factor())
+        .unwrap_or(1.0)
+        .max(0.1);
+    Some((position.x, position.y / scale))
+}
+
 /// 在主线程调用（Tauri setup 即主线程）。
 pub fn start_mac_blur(app: &tauri::AppHandle, params: Arc<Mutex<GpuRendererParams>>) {
     if MAC_BLUR_RUNNING.swap(true, Ordering::Relaxed) {
@@ -102,6 +118,7 @@ fn mask_update_loop(
     // Canvas 光圈一起"呼吸"，否则鼠标移动时模糊会吃进视觉清晰区。
     let mut comfort = crate::renderer::ComfortState::new();
     let mut comfort_tick = std::time::Instant::now();
+    let mut diagnostic_tick = std::time::Instant::now();
 
     loop {
         thread::sleep(Duration::from_millis(16));
@@ -109,11 +126,10 @@ fn mask_update_loop(
         let Some(overlay) = handle.get_webview_window("overlay") else {
             continue;
         };
-        let (Ok(position), Ok(size), Ok(cursor)) = (
-            overlay.outer_position(),
-            overlay.outer_size(),
-            handle.cursor_position(),
-        ) else {
+        let (Ok(position), Ok(size)) = (overlay.outer_position(), overlay.outer_size()) else {
+            continue;
+        };
+        let Some((cursor_x, cursor_y)) = corrected_cursor_position(&handle) else {
             continue;
         };
 
@@ -123,8 +139,8 @@ fn mask_update_loop(
 
         // 全局物理坐标 -> overlay 本地物理坐标
         let raw_mouse = [
-            (cursor.x - position.x as f64) as f32,
-            (cursor.y - position.y as f64) as f32,
+            (cursor_x - position.x as f64) as f32,
+            (cursor_y - position.y as f64) as f32,
         ];
 
         let dt = comfort_tick.elapsed().as_secs_f32();
@@ -138,6 +154,30 @@ fn mask_update_loop(
             size.width as f32,
             size.height as f32,
         );
+
+        // 每秒一条诊断：本地鼠标、屏幕物理尺寸、生效参数与 mask 采样，
+        // 排查坐标/参数链路问题直接看这行。
+        if diagnostic_tick.elapsed() >= Duration::from_secs(1) {
+            diagnostic_tick = std::time::Instant::now();
+            let center = pixels[(MASK_HEIGHT / 2) * MASK_WIDTH + MASK_WIDTH / 2];
+            let corner = pixels[0];
+            eprintln!(
+                "[mac-blur] local_mouse={:.0},{:.0} screen={}x{} mode={} radius={:.0} feather={:.0} blur={:.0} band={:.0} enabled={} mask_center={} mask_corner={}",
+                smoothed_mouse[0],
+                smoothed_mouse[1],
+                size.width,
+                size.height,
+                effective_params.mode,
+                effective_params.radius,
+                effective_params.feather,
+                effective_params.blur_px,
+                effective_params.band_half_px,
+                effective_params.enabled,
+                center,
+                corner
+            );
+        }
+
         let png = encode_mask_png(MASK_WIDTH, MASK_HEIGHT, &pixels);
 
         let send = handle.clone();

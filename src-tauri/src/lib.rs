@@ -746,13 +746,21 @@ pub fn run() {
                 // Windows=GetCursorPos，macOS=NSEvent.mouseLocation，Linux=X11。
                 // 返回物理像素，前端按 devicePixelRatio 换算回 CSS 像素。
                 loop {
-                    if let Ok(position) = handle.cursor_position() {
+                    #[cfg(target_os = "macos")]
+                    let cursor = platform::macos::corrected_cursor_position(&handle);
+                    #[cfg(not(target_os = "macos"))]
+                    let cursor = handle
+                        .cursor_position()
+                        .ok()
+                        .map(|position| (position.x, position.y));
+
+                    if let Some((x, y)) = cursor {
                         let _ = handle.emit_to(
                             "overlay",
                             "cursor-position",
                             CursorPosition {
-                                x: position.x.round() as i32,
-                                y: position.y.round() as i32,
+                                x: x.round() as i32,
+                                y: y.round() as i32,
                             },
                         );
                     }
