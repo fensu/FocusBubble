@@ -9,3 +9,4 @@ src-tauri/target
 # updater signing keys (never commit)
 keys/
 *.key
+mask_test.png
